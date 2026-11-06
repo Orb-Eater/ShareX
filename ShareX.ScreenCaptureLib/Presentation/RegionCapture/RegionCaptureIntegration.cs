@@ -27,10 +27,12 @@
 
 using Avalonia.Threading;
 using ShareX.AvaloniaUI.Integration;
+using ShareX.HelpersLib;
 using ShareX.ImageEditor.Integration;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Threading.Tasks;
 
 namespace ShareX.ScreenCaptureLib.Presentation.RegionCapture;
@@ -48,6 +50,30 @@ public static class RegionCaptureIntegration
     {
         LastRegionRectangle = bounds;
         LastRegionRectangles = regions;
+    }
+
+    // Built ahead of the next capture on an idle UI thread, because loading the window takes longer than using it.
+    private static RegionCaptureWindow? _spareWindow;
+    private static CultureInfo? _spareWindowCulture;
+    private static int _openCaptures;
+
+    /// <summary>True while a real capture overlay is open. Warm-up runs do not count.</summary>
+    public static bool IsCaptureOpen => _openCaptures > 0;
+
+    private static void CreateSpareWindow()
+    {
+        try
+        {
+            if (_spareWindow == null)
+            {
+                _spareWindowCulture = CultureInfo.CurrentUICulture;
+                _spareWindow = new RegionCaptureWindow();
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugHelper.WriteException(ex);
+        }
     }
 
     public static Task<AvaloniaRegionCaptureResult?> CaptureAsync(AvaloniaRegionCaptureRequest request)
@@ -73,12 +99,24 @@ public static class RegionCaptureIntegration
         Dispatcher.UIThread.Post(async () =>
         {
             RegionCaptureWindow? window = null;
+            if (!request.Prewarm) _openCaptures++;
 
             try
             {
                 ImageEditorIntegration.Initialize();
-                window = new RegionCaptureWindow(request);
-                completion.TrySetResult(await window.CaptureAsync());
+                RegionCaptureWindow? spare = _spareWindow;
+                _spareWindow = null;
+                // A spare built before a language change would show the old language. One that was closed cannot be shown.
+                if (spare != null && (spare.TryGetPlatformHandle() == null || !Equals(_spareWindowCulture, CultureInfo.CurrentUICulture)))
+                {
+                    spare.Close(); // A window that was never shown must still be closed, or its HWND stays alive.
+                    spare = null;
+                }
+                window = spare ?? new RegionCaptureWindow();
+                window.Bind(request);
+                AvaloniaRegionCaptureResult? result = await window.CaptureAsync();
+                Dispatcher.UIThread.Post(CreateSpareWindow, DispatcherPriority.Background);
+                completion.TrySetResult(result);
             }
             catch (Exception ex)
             {
@@ -89,6 +127,10 @@ public static class RegionCaptureIntegration
                 }
 
                 completion.TrySetException(ex);
+            }
+            finally
+            {
+                if (!request.Prewarm) _openCaptures--;
             }
         });
 

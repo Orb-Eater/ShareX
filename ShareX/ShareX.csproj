@@ -12,6 +12,7 @@
       Without it, the first region capture and other first-time actions are noticeably slower than later ones.
     -->
     <PublishReadyToRun>true</PublishReadyToRun>
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
   <ItemGroup>
     <!-- Large or non-Windows assemblies that are not on the startup or capture path, kept as IL to limit size. -->

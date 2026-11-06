@@ -40,6 +40,7 @@ namespace ShareX
         public DateTime FirstTimeRunDate = DateTime.Now;
         public bool ShowStartScreen = true;
         public bool ShowIconPackPrompt = true;
+        public bool PrewarmRegionCapture = true;
         public string FileUploadDefaultDirectory = "";
         public int NameParserAutoIncrementNumber = 0;
         public List<QuickTaskInfo> QuickTaskPresets = QuickTaskInfo.DefaultPresets;

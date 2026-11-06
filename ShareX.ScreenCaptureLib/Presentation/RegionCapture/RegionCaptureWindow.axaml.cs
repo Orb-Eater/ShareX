@@ -33,6 +33,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Rendering.Composition;
 using Avalonia.VisualTree;
 using ShareX.AvaloniaUI.Input;
 using ShareX.AvaloniaUI.Theming;
@@ -125,10 +126,17 @@ public partial class RegionCaptureWindow : Window
 
     public RegionCaptureWindow(AvaloniaRegionCaptureRequest request) : this()
     {
+        Bind(request);
+    }
+
+    /// <summary>Attaches a capture to a window built earlier. A window takes one capture only.</summary>
+    internal void Bind(AvaloniaRegionCaptureRequest request)
+    {
+        RequestedThemeVariant = ThemeManager.GetCurrentTheme();
         _request = request ?? throw new ArgumentNullException(nameof(request));
         _imageWidth = Math.Max(1, request.ScreenBounds.Width);
         _imageHeight = Math.Max(1, request.ScreenBounds.Height);
-        if (request.RegionCaptureOptions.ActiveMonitorMode)
+        if (request.RegionCaptureOptions.ActiveMonitorMode && !request.Prewarm)
         {
             Helpers.LockCursorToWindow(this);
         }
@@ -141,6 +149,15 @@ public partial class RegionCaptureWindow : Window
         if (_request == null)
         {
             throw new InvalidOperationException("A capture request is required.");
+        }
+
+        if (_request.Prewarm)
+        {
+            Topmost = false;
+            ShowActivated = false;
+            // Focus() moves Avalonia's one global keyboard focus, even in a window that is not active.
+            _editorWorkspace.Focusable = false;
+            _regionInputSurface.Focusable = false;
         }
 
         ConfigureInitialPixelBounds();
@@ -481,7 +498,7 @@ public partial class RegionCaptureWindow : Window
             }
 
             ApplyPixelSize();
-            Helpers.EnsureWindowPosition(this, _request.ScreenBounds.X, _request.ScreenBounds.Y);
+            Helpers.EnsureWindowPosition(this, _request.ScreenBounds.X, WindowY);
             UpdatePixelTransforms();
             _editorWorkspace.ConfigureForFullscreenWorkspace();
             _editorWorkspace.LoadWorkspaceImage(_request.Screenshot);
@@ -495,9 +512,12 @@ public partial class RegionCaptureWindow : Window
                 ActivateRegionTool();
             }
 
-            Activate();
-            Focus();
-            _regionInputSurface.Focus();
+            if (!_request.Prewarm)
+            {
+                Activate();
+                Focus();
+                _regionInputSurface.Focus();
+            }
 
             DrawingPoint cursorPosition = CaptureHelpers.GetCursorPosition();
             _lastPointerPoint = ClampPoint(new Point(
@@ -506,7 +526,20 @@ public partial class RegionCaptureWindow : Window
             UpdateToolbarPosition(new PixelPoint(cursorPosition.X, cursorPosition.Y));
             UpdateHud(_lastPointerPoint);
 
-            _ = LoadWindowRegionsAsync();
+            Task windowRegions = LoadWindowRegionsAsync();
+
+            if (_request.Prewarm)
+            {
+                Task? firstFrame = ElementComposition.GetElementVisual(this)?.Compositor.RequestCompositionBatchCommitAsync().Rendered;
+                if (firstFrame != null)
+                {
+                    await Task.WhenAny(firstFrame, Task.Delay(5000));
+                }
+
+                await windowRegions;
+                CancelCapture();
+                return;
+            }
 
             int inputDelay = Math.Max(0, RegionCaptureOptions.InputDelay);
             if (inputDelay > 0)
@@ -2001,9 +2034,14 @@ public partial class RegionCaptureWindow : Window
         // Win32 selects the DPI of the monitor at the virtual desktop origin. Reassigning
         // Position after the window spans multiple monitors can make MonitorFromWindow
         // select a different monitor and silently change Avalonia's internal scale.
-        Position = new PixelPoint(_request.ScreenBounds.X, _request.ScreenBounds.Y);
+        Position = new PixelPoint(_request.ScreenBounds.X, WindowY);
         ApplyPixelSize();
     }
+
+    // A warm-up window sits far above the desktop, never on screen. On staggered mixed-DPI layouts its DPI can differ.
+    private int WindowY => _request!.Prewarm
+        ? _request.ScreenBounds.Y - _request.ScreenBounds.Height - 20000
+        : _request.ScreenBounds.Y;
 
     private void ApplyPixelSize()
     {

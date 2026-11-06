@@ -28,6 +28,7 @@
 using ShareX.AvaloniaUI.Integration;
 using ShareX.HelpersLib;
 using ShareX.ImageEditor.Integration;
+using ShareX.ScreenCaptureLib.Presentation.RegionCapture;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
@@ -161,5 +162,30 @@ internal static class Program
         }
 
         DebugHelper.WriteLine("Hotkey host init finished.");
+
+        if (ApplicationState.Settings.PrewarmRegionCapture)
+        {
+            _ = PrewarmRegionCaptureAsync();
+        }
+    }
+
+    private static async Task PrewarmRegionCaptureAsync()
+    {
+        try
+        {
+            await Task.Delay(1000);
+
+            // Two runs: after only one, the second real capture is still slower than the rest.
+            for (int i = 0; i < 2; i++)
+            {
+                if (RegionCaptureIntegration.IsCaptureOpen) break;
+                await new CaptureRegion().PrewarmAsync(TaskSettings.GetDefaultTaskSettings());
+                await Task.Delay(200);
+            }
+        }
+        catch (Exception e)
+        {
+            DebugHelper.WriteException(e, "Region capture prewarm failed.");
+        }
     }
 }

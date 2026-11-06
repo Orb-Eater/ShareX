@@ -56,4 +56,7 @@ public sealed class AvaloniaRegionCaptureRequest
 
     /// <summary>Cursor draw position in screenshot pixel coordinates.</summary>
     public Point CursorPosition { get; init; }
+
+    /// <summary>Warm-up run: the window stays off screen, takes no focus, and closes after its first frame.</summary>
+    public bool Prewarm { get; init; }
 }

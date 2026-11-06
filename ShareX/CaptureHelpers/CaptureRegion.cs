@@ -24,6 +24,7 @@
 #endregion License Information (GPL v3)
 
 using ShareX.HelpersLib;
+using ShareX.ImageEditor.Integration;
 using ShareX.ScreenCaptureLib;
 using ShareX.ScreenCaptureLib.Presentation.RegionCapture;
 using SkiaSharp;
@@ -35,9 +36,18 @@ namespace ShareX
 {
     public class CaptureRegion : CaptureBase
     {
+        private bool _prewarm;
+
         protected override TaskMetadata Execute(TaskSettings taskSettings)
         {
             return null;
+        }
+
+        /// <summary>Runs the whole capture path once with an overlay nobody sees, so the first real capture is not the first run.</summary>
+        public async Task PrewarmAsync(TaskSettings taskSettings)
+        {
+            _prewarm = true;
+            await ExecuteRegionCaptureAvaloniaAsync(taskSettings);
         }
 
         protected override async Task<TaskMetadata> ExecuteAsync(TaskSettings taskSettings)
@@ -77,10 +87,14 @@ namespace ShareX
 
             AvaloniaRegionCaptureRequest request = new AvaloniaRegionCaptureRequest
             {
+                Prewarm = _prewarm,
                 Screenshot = frozenScreenshot,
                 ScreenBounds = screenBounds,
-                RegionCaptureOptions = taskSettings.CaptureSettingsReference.RegionCaptureOptions,
-                ImageEditorOptions = taskSettings.ToolsSettingsReference.ImageEditorOptions,
+                // The window writes some values back to these options, and a warm-up must not change saved settings.
+                RegionCaptureOptions = _prewarm
+                    ? new RegionCaptureOptions { ActiveMonitorMode = activeMonitorMode }
+                    : taskSettings.CaptureSettingsReference.RegionCaptureOptions,
+                ImageEditorOptions = _prewarm ? new ImageEditorOptions() : taskSettings.ToolsSettingsReference.ImageEditorOptions,
                 EnableAnnotations = !taskSettings.AdvancedSettings.RegionCaptureDisableAnnotation,
                 AllowMultipleRegions = true,
                 CursorBitmap = cursorBitmap,
