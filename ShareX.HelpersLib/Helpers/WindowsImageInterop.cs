@@ -27,6 +27,7 @@ using SkiaSharp;
 using System;
 using System.ComponentModel;
 using System.Drawing;
+using System.Numerics;
 using System.Runtime.InteropServices;
 
 namespace ShareX.HelpersLib;
@@ -77,19 +78,58 @@ public static class WindowsImageInterop
     {
         if (rectangle.Width <= 0 || rectangle.Height <= 0) return null;
         if (window == IntPtr.Zero) window = NativeMethods.GetDesktopWindow();
+
+        // The bitmap uses the DIB section's memory directly and releases it when disposed, so no pixel is copied.
         IntPtr source = NativeMethods.GetWindowDC(window);
         if (source == IntPtr.Zero) throw new Win32Exception();
+        IntPtr dc = IntPtr.Zero, handle = IntPtr.Zero, previous = IntPtr.Zero;
+        bool handed = false;
         try
         {
-            return DrawNative(rectangle.Size, SKColors.Black, dc =>
+            dc = NativeMethods.CreateCompatibleDC(source);
+            if (dc == IntPtr.Zero) throw new Win32Exception();
+            BITMAPINFOHEADER header = new(rectangle.Width, -rectangle.Height, 32) { biSize = 40, biSizeImage = checked((uint)rectangle.Width * (uint)rectangle.Height * 4) };
+            handle = NativeMethods.CreateDIBSection(dc, ref header, 0, out IntPtr pixels, IntPtr.Zero, 0);
+            if (handle == IntPtr.Zero) throw new Win32Exception();
+            previous = NativeMethods.SelectObject(dc, handle);
+            if (!NativeMethods.BitBlt(dc, 0, 0, rectangle.Width, rectangle.Height, source,
+                rectangle.X, rectangle.Y, NativeRasterOperation.SourceCopy | NativeRasterOperation.CaptureBlt))
+                throw new Win32Exception();
+            drawCursor?.Invoke(dc);
+            GdiFlush();
+            NativeMethods.SelectObject(dc, previous);
+            previous = IntPtr.Zero;
+
+            SKBitmap result = new();
+            IntPtr owned = handle;
+            handed = true; // Skia calls the release delegate from here on, also when InstallPixels fails.
+            if (!result.InstallPixels(new SKImageInfo(rectangle.Width, rectangle.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul), pixels, rectangle.Width * 4,
+                (address, context) => NativeMethods.DeleteObject(owned)))
             {
-                if (!NativeMethods.BitBlt(dc, 0, 0, rectangle.Width, rectangle.Height, source,
-                    rectangle.X, rectangle.Y, NativeRasterOperation.SourceCopy | NativeRasterOperation.CaptureBlt))
-                    throw new Win32Exception();
-                drawCursor?.Invoke(dc);
-            });
+                result.Dispose();
+                throw new InvalidOperationException("Unable to access Windows image pixels.");
+            }
+            SetOpaque(result);
+            return result;
         }
-        finally { NativeMethods.ReleaseDC(window, source); }
+        finally
+        {
+            if (previous != IntPtr.Zero) NativeMethods.SelectObject(dc, previous);
+            if (!handed && handle != IntPtr.Zero) NativeMethods.DeleteObject(handle);
+            if (dc != IntPtr.Zero) NativeMethods.DeleteDC(dc);
+            NativeMethods.ReleaseDC(window, source);
+        }
+    }
+
+    // Draws only the area under the icon. Drawing the whole bitmap took about 10 ms on a large desktop; Skia probably copies it first.
+    private static void DrawBackgroundArea(SKCanvas canvas, SKBitmap background, Point position, Size size)
+    {
+        SKRectI area = SKRectI.Intersect(
+            new SKRectI(position.X, position.Y, position.X + size.Width, position.Y + size.Height),
+            new SKRectI(0, 0, background.Width, background.Height));
+        if (area.IsEmpty) return;
+        using SKBitmap part = new();
+        if (background.ExtractSubset(part, area)) canvas.DrawBitmap(part, area.Left - position.X, area.Top - position.Y);
     }
 
     private static unsafe SKBitmap DrawNative(Size size, SKColor background, Action<IntPtr> draw, Action<SKCanvas> drawBackground = null)
@@ -149,7 +189,7 @@ public static class WindowsImageInterop
         using SKBitmap black = DrawNative(size, SKColors.Black, draw);
         using SKBitmap white = DrawNative(size, SKColors.White, draw);
         using SKBitmap composited = background == null ? null : DrawNative(size, SKColors.Black, draw,
-            canvas => canvas.DrawBitmap(background, -position.X, -position.Y));
+            canvas => DrawBackgroundArea(canvas, background, position, size));
         SKBitmap result = SkiaImageHelpers.CreateBitmap(size.Width, size.Height);
         using SkiaPixelBuffer dark = new(black, true, PixelAccess.ReadOnly);
         using SkiaPixelBuffer light = new(white, true, PixelAccess.ReadOnly);
@@ -181,10 +221,20 @@ public static class WindowsImageInterop
 
     private static unsafe void SetOpaque(SKBitmap bitmap)
     {
-        for (int y = 0; y < bitmap.Height; y++)
+        // Read the size once: each Skia property is a native call, far too slow per pixel on a large desktop.
+        int width = bitmap.Width, height = bitmap.Height, rowBytes = bitmap.RowBytes;
+        byte* pixels = (byte*)bitmap.GetPixels();
+        Vector<uint> alpha = new(0xFF000000u);
+        for (int y = 0; y < height; y++)
         {
-            byte* row = (byte*)bitmap.GetPixels() + y * bitmap.RowBytes;
-            for (int x = 0; x < bitmap.Width; x++) row[x * 4 + 3] = 255;
+            Span<uint> row = new(pixels + y * rowBytes, width);
+            int x = 0;
+            for (; x <= width - Vector<uint>.Count; x += Vector<uint>.Count)
+            {
+                Span<uint> block = row.Slice(x, Vector<uint>.Count);
+                (new Vector<uint>(block) | alpha).CopyTo(block);
+            }
+            for (; x < width; x++) row[x] |= 0xFF000000u;
         }
         bitmap.NotifyPixelsChanged();
     }
