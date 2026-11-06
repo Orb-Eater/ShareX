@@ -53,6 +53,8 @@ public static class RegionCaptureIntegration
     public static Task<AvaloniaRegionCaptureResult?> CaptureAsync(AvaloniaRegionCaptureRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.Screenshot == null) request.CursorBitmap?.Dispose();
+        ArgumentNullException.ThrowIfNull(request.Screenshot);
 
         try
         {

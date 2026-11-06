@@ -55,13 +55,9 @@ namespace ShareX
                 ? CaptureHelpers.GetActiveScreenBounds()
                 : CaptureHelpers.GetScreenBounds();
 
-            SKBitmap frozenScreenshot;
-            using (Bitmap canvas = activeMonitorMode
+            SKBitmap frozenScreenshot = activeMonitorMode
                 ? screenshot.CaptureActiveMonitor()
-                : screenshot.CaptureFullscreen())
-            {
-                frozenScreenshot = canvas.Copy();
-            }
+                : screenshot.CaptureFullscreen();
 
             SKBitmap cursorBitmap = null;
             Point cursorPosition = Point.Empty;
