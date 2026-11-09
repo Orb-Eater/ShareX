@@ -119,7 +119,8 @@ public partial class NotificationWindow : Window
             return;
         }
 
-        if (config.Image == null)
+        // A text-only notification (a failed task, for one) has no file, and loading a null path logged an exception.
+        if (config.Image == null && !string.IsNullOrEmpty(config.FilePath))
         {
             config.Image = SkiaImageHelpers.LoadImage(config.FilePath);
         }

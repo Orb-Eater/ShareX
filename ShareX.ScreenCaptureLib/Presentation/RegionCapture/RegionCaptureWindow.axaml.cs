@@ -62,6 +62,9 @@ public partial class RegionCaptureWindow : Window
 
     private AvaloniaRegionCaptureRequest? _request;
     private AvaloniaRegionCaptureResult? _pendingResult;
+
+    /// <summary>How the capture ended, for the log. Stays at its default when the window was closed from outside.</summary>
+    internal string EndReason { get; private set; } = "the window was closed";
     private EditorView _editorWorkspace = null!;
     private MainViewModel? _viewModel;
     private Grid _regionInputSurface = null!;
@@ -327,7 +330,7 @@ public partial class RegionCaptureWindow : Window
             return;
         }
 
-        CancelCapture();
+        CancelCapture("Esc pressed");
     }
 
     private void ResolveControls()
@@ -493,7 +496,7 @@ public partial class RegionCaptureWindow : Window
         {
             if (_request == null || _viewModel == null)
             {
-                CancelCapture();
+                CancelCapture("the window opened without a capture");
                 return;
             }
 
@@ -537,7 +540,7 @@ public partial class RegionCaptureWindow : Window
                 }
 
                 await windowRegions;
-                CancelCapture();
+                CancelCapture("warm-up finished");
                 return;
             }
 
@@ -555,7 +558,7 @@ public partial class RegionCaptureWindow : Window
         catch (Exception ex)
         {
             _startupException = ex;
-            CancelCapture();
+            CancelCapture("the window failed to open");
         }
     }
 
@@ -1230,7 +1233,7 @@ public partial class RegionCaptureWindow : Window
         {
             if (!_editorWorkspace.DeleteWorkspaceAnnotationAt(workspacePoint))
             {
-                CancelCapture();
+                CancelCapture($"{action} click with no shape under the pointer");
             }
         }
         else if (action == RegionCaptureAction.RemoveShape)
@@ -1717,12 +1720,12 @@ public partial class RegionCaptureWindow : Window
             case RegionCaptureAction.None:
                 break;
             case RegionCaptureAction.CancelCapture:
-                CancelCapture();
+                CancelCapture($"{action} click");
                 break;
             case RegionCaptureAction.RemoveShapeCancelCapture:
                 if (!TryRemoveRegionAt(_lastPointerPoint))
                 {
-                    CancelCapture();
+                    CancelCapture($"{action} click with no region under the pointer");
                 }
                 break;
             case RegionCaptureAction.RemoveShape:
@@ -1850,7 +1853,7 @@ public partial class RegionCaptureWindow : Window
         SKBitmap? output = _editorWorkspace.GetSnapshot(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
         if (output == null)
         {
-            CancelCapture();
+            CancelCapture("the selected area could not be read");
             return;
         }
 
@@ -1873,6 +1876,7 @@ public partial class RegionCaptureWindow : Window
             windowInfo,
             _viewModel?.IsDirty == true);
         RegionCaptureIntegration.SetLastRegion(screenRectangle, regions.Select(ToScreenRectangle).ToArray());
+        EndReason = regions.Count > 1 ? $"{regions.Count} regions selected" : "region selected";
         _closing = true;
         Close();
     }
@@ -1908,13 +1912,14 @@ public partial class RegionCaptureWindow : Window
         return _windows.FirstOrDefault(window => window.IsWindow && window.Rectangle.Contains(point))?.WindowInfo;
     }
 
-    private void CancelCapture()
+    private void CancelCapture(string reason)
     {
         if (_closing)
         {
             return;
         }
 
+        EndReason = reason;
         _closing = true;
         _pendingResult = null;
         Close();

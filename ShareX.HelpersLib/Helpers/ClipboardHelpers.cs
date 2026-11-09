@@ -67,13 +67,26 @@ namespace ShareX.HelpersLib
         public static bool CopyImage(Image img, string fileName = null)
         {
             if (img == null) return false;
+            string size = "unknown size";
             try
             {
+                size = $"{img.Width}x{img.Height}";
                 using MemoryStream png = new();
                 img.Save(png, ImageFormat.Png);
-                return AvaloniaClipboard.SetImage(png.ToArray(), OperatingSystem.IsWindows() ? CreateDib(img) : null, CreateImageHtml(fileName));
+                byte[] pngBytes = png.ToArray();
+                byte[] dib = OperatingSystem.IsWindows() ? CreateDib(img) : null;
+                string html = CreateImageHtml(fileName);
+                bool copied = AvaloniaClipboard.SetImage(pngBytes, dib, html);
+                // One line per image copy: the size and formats tell what another app could paste.
+                // KB rounded up, so a small image never shows as 0 KB.
+                string formats = string.Join(" + ", new[] { dib != null ? $"DIB {(dib.Length + 1023) / 1024} KB" : null,
+                    $"PNG {(pngBytes.Length + 1023) / 1024} KB", html != null ? "HTML" : null }.Where(format => format != null));
+                DebugHelper.WriteLine(copied
+                    ? $"Clipboard: image {size} written as {formats}."
+                    : $"Clipboard: image {size} was not written ({formats}).");
+                return copied;
             }
-            catch (Exception e) { DebugHelper.WriteException(e, "Clipboard copy image failed."); return false; }
+            catch (Exception e) { DebugHelper.WriteException(e, $"Clipboard copy image failed ({size})."); return false; }
         }
 
         private static string CreateImageHtml(string fileName)

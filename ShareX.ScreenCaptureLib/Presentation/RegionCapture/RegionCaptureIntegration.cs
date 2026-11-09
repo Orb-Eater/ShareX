@@ -31,6 +31,7 @@ using ShareX.HelpersLib;
 using ShareX.ImageEditor.Integration;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -170,6 +171,7 @@ public static class RegionCaptureIntegration
         {
             RegionCaptureWindow? window = null;
             if (!request.Prewarm) _openCaptures++;
+            long start = Stopwatch.GetTimestamp();
 
             try
             {
@@ -187,10 +189,17 @@ public static class RegionCaptureIntegration
                 window = spare ?? new RegionCaptureWindow();
                 window.Bind(request);
                 AvaloniaRegionCaptureResult? result = await window.CaptureAsync();
+                if (!request.Prewarm) LogCaptureEnd(window.EndReason, result, start);
                 completion.TrySetResult(result);
             }
             catch (Exception ex)
             {
+                if (!request.Prewarm)
+                {
+                    try { DebugHelper.WriteLine($"Region capture ended: failed after {ElapsedMilliseconds(start)} ms ({ex.GetType().Name}: {ex.Message})."); }
+                    catch { } // Logging only: the failure below must still reach the caller.
+                }
+
                 if (window == null || !window.IsVisible)
                 {
                     request.Screenshot.Dispose();
@@ -208,6 +217,32 @@ public static class RegionCaptureIntegration
 
         return completion.Task;
     }
+
+    // One line per capture, so the log shows whether a capture was taken or cancelled and why.
+    // It must never turn a good capture into a failed one, so nothing it does may throw.
+    private static void LogCaptureEnd(string reason, AvaloniaRegionCaptureResult? result, long start)
+    {
+        try
+        {
+            long elapsed = ElapsedMilliseconds(start);
+
+            if (result == null)
+            {
+                DebugHelper.WriteLine($"Region capture ended: {reason}, nothing captured, open {elapsed} ms.");
+                return;
+            }
+
+            Rectangle area = result.ScreenRectangle;
+            string annotated = result.ImageModified ? ", with annotations" : "";
+            DebugHelper.WriteLine($"Region capture ended: {reason}, captured {result.Image.Width}x{result.Image.Height} at {area.X},{area.Y}{annotated}, open {elapsed} ms.");
+        }
+        catch
+        {
+            // Logging only.
+        }
+    }
+
+    private static long ElapsedMilliseconds(long start) => (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
 
     /// <summary>
     /// Lets the user draw a rectangle over the live desktop and returns it in screen pixels, or null when cancelled.

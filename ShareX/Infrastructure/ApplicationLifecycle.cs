@@ -83,6 +83,7 @@ internal static class ApplicationLifecycle
             return;
         }
 
+        Program.FlushEditorLogRepeats();
         DebugHelper.WriteLine("ShareX closing.");
         ApplicationState.WatchFolderManager?.Dispose();
         ApplicationState.WatchFolderManager = null;

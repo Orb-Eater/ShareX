@@ -2263,7 +2263,19 @@ namespace ShareX.ImageEditor.Presentation.Views
             item.SetBitmap(bitmap);
             data.Add(item);
 
-            await clipboard.SetDataAsync(data);
+            // This path skips ShareX's own clipboard writer (used when a host handles Copy), so log it separately.
+            string size = $"{skBitmap.Width}x{skBitmap.Height}";
+            try
+            {
+                await clipboard.SetDataAsync(data);
+            }
+            catch (Exception ex)
+            {
+                EditorServices.ReportWarning(nameof(EditorView), $"Copy: image {size} could not be put on the clipboard.", ex);
+                throw;
+            }
+
+            EditorServices.ReportInformation(nameof(EditorView), $"Copy: image {size} put on the clipboard by the editor itself (Avalonia bitmap, PNG {(encoded.Size + 1023) / 1024} KB before conversion).");
         }
 
         private Task<string?> OnSaveRequested()

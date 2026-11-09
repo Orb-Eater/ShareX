@@ -66,6 +66,7 @@ namespace ShareX.ImageEditor.Presentation.Views
                     if (topLevel?.Clipboard != null)
                     {
                         await topLevel.Clipboard.ClearAsync();
+                        EditorServices.ReportInformation(nameof(EditorView), "Shape cut inside the editor: the system clipboard was emptied.");
                     }
                 }
                 catch (Exception ex)
@@ -102,6 +103,7 @@ namespace ShareX.ImageEditor.Presentation.Views
                     if (topLevel?.Clipboard != null)
                     {
                         await topLevel.Clipboard.ClearAsync();
+                        EditorServices.ReportInformation(nameof(EditorView), "Shape copied inside the editor: the system clipboard was emptied.");
                     }
                 }
                 catch (Exception ex)

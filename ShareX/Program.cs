@@ -28,9 +28,11 @@
 using ShareX.AvaloniaUI.Integration;
 using ShareX.HelpersLib;
 using ShareX.ImageEditor.Integration;
+using ShareX.ImageEditor.Integration.Diagnostics;
 using ShareX.ScreenCaptureLib.Presentation.RegionCapture;
 using System;
 using System.Diagnostics;
+using System.Text;
 using System.Threading.Tasks;
 
 #if MicrosoftStore
@@ -119,8 +121,97 @@ internal static class Program
         ApplicationLifecycle.CloseSequence();
     }
 
+    private static readonly object _editorLogLock = new();
+    private static string? _lastEditorKey;
+    private static string? _lastEditorMessage;
+    private static long _lastEditorMessageTime;
+    private static int _editorMessageRepeats;
+
+    // The image editor reports its own warnings, errors and clipboard steps here. Nothing listened before,
+    // so they never reached the log. Debug messages (effect preview tracing) stay out of it.
+    private static void ConnectImageEditorLog()
+    {
+        EditorServices.Diagnostics ??= new DelegateEditorDiagnosticsSink(diagnostic =>
+        {
+            if (diagnostic.Level == EditorDiagnosticLevel.Debug)
+            {
+                Debug.WriteLine($"[ImageEditor:Debug:{diagnostic.Source}] {diagnostic.Message}"); // As before the sink was set.
+                return;
+            }
+
+            string message = $"Image editor {diagnostic.Level.ToString().ToLowerInvariant()} ({diagnostic.Source}): {diagnostic.Message}";
+            // The exception's type and stack trace are part of the key, so two different failures with the same text
+            // both get logged. Its message is left out: one holding a changing value would make every repeat unique.
+            string key = diagnostic.ExceptionText == null ? message : message + "\n" + GetExceptionShape(diagnostic.ExceptionText);
+
+            // Some editor warnings can fire on every frame while something keeps failing: log the same one at most every 5 s.
+            lock (_editorLogLock)
+            {
+                long now = Environment.TickCount64;
+                if (key == _lastEditorKey && now - _lastEditorMessageTime < 5000)
+                {
+                    _editorMessageRepeats++;
+                    return;
+                }
+
+                WriteEditorLogRepeats();
+                _lastEditorKey = key;
+                _lastEditorMessage = message;
+                _lastEditorMessageTime = now;
+
+                if (diagnostic.ExceptionText != null)
+                {
+                    DebugHelper.WriteException(diagnostic.ExceptionText, message);
+                }
+                else
+                {
+                    DebugHelper.WriteLine(message);
+                }
+            }
+        });
+    }
+
+    // Writes how often the last editor message was held back. Call with _editorLogLock held.
+    private static void WriteEditorLogRepeats()
+    {
+        if (_editorMessageRepeats == 0) return;
+        DebugHelper.WriteLine($"{_lastEditorMessage} (repeated {_editorMessageRepeats} more {(_editorMessageRepeats == 1 ? "time" : "times")})");
+        _editorMessageRepeats = 0;
+    }
+
+    // So a count still held back when ShareX closes reaches the log. Called from ApplicationLifecycle.CloseSequence,
+    // which every exit runs, also a Windows logoff or shutdown.
+    internal static void FlushEditorLogRepeats()
+    {
+        lock (_editorLogLock)
+        {
+            WriteEditorLogRepeats();
+        }
+    }
+
+    // Exception.ToString() starts with "Type: message", and a message can run over several lines ("Actual value was 5.").
+    // Keep only the type and the stack frame lines, which stay the same when the same failure repeats.
+    private static string GetExceptionShape(string exceptionText)
+    {
+        string[] lines = exceptionText.Split('\n');
+        int colon = lines[0].IndexOf(':');
+        StringBuilder shape = new(colon < 0 ? lines[0].TrimEnd() : lines[0][..colon]);
+
+        for (int i = 1; i < lines.Length; i++)
+        {
+            string line = lines[i].Trim();
+            if (line.StartsWith("at ", StringComparison.Ordinal) || line.StartsWith("--- End", StringComparison.Ordinal))
+            {
+                shape.Append('\n').Append(line);
+            }
+        }
+
+        return shape.ToString();
+    }
+
     private static async Task StartApplicationAsync()
     {
+        ConnectImageEditorLog();
         ImageEditorIntegration.Initialize();
 
         if (ApplicationState.Settings.ShowStartScreen)

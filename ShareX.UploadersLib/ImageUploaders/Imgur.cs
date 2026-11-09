@@ -373,7 +373,8 @@ namespace ShareX.UploadersLib.ImageUploaders
                         if (errorData != null)
                         {
                             if (UploadMethod == AccountType.User && refreshTokenOnError &&
-                                ((string)errorData.error).Equals("The access token provided is invalid.", StringComparison.OrdinalIgnoreCase) &&
+                                errorData.error is string errorMessage &&
+                                errorMessage.Equals("The access token provided is invalid.", StringComparison.OrdinalIgnoreCase) &&
                                 await RefreshAccessTokenAsync(cancellationToken).ConfigureAwait(false))
                             {
                                 DebugHelper.WriteLine("Imgur access token refreshed, reuploading image.");
@@ -404,14 +405,42 @@ namespace ShareX.UploadersLib.ImageUploaders
 
         private ImgurErrorData ParseError(ImgurResponse response)
         {
-            ImgurErrorData errorData = ((JObject)response.data).ToObject<ImgurErrorData>();
-
-            if (errorData != null && !(errorData.error is string))
+            // Some Imgur errors (429 Too Many Requests, for one) come in the newer format, with no "data":
+            // {"errors":[{"code":"429","status":"Too Many Requests","detail":"Too Many Requests"}]}
+            if (response.data is not JObject data)
             {
-                errorData.error = ((JObject)errorData.error).ToObject<ImgurError>().message;
+                // Read loosely: a reply in an unexpected shape must not turn into a parse failure.
+                JObject apiError = response.errors as JObject;
+                if (apiError == null && response.errors is JArray list)
+                {
+                    foreach (JToken item in list)
+                    {
+                        if (item is JObject first) { apiError = first; break; }
+                    }
+                }
+                if (apiError == null) return null;
+
+                string code = GetText(apiError["code"]);
+                if (response.status == 0 && int.TryParse(code, out int status)) response.status = status;
+                return new ImgurErrorData { error = GetText(apiError["detail"]) ?? GetText(apiError["status"]) ?? code };
+            }
+
+            ImgurErrorData errorData = data.ToObject<ImgurErrorData>();
+
+            if (errorData?.error != null && errorData.error is not string)
+            {
+                errorData.error = errorData.error is JObject errorObject
+                    ? errorObject.ToObject<ImgurError>()?.message
+                    : errorData.error.ToString();
             }
 
             return errorData;
+        }
+
+        private static string GetText(JToken token)
+        {
+            string text = token == null || token.Type == JTokenType.Null ? null : token.ToString();
+            return string.IsNullOrEmpty(text) ? null : text;
         }
     }
 
@@ -420,6 +449,7 @@ namespace ShareX.UploadersLib.ImageUploaders
         public object data { get; set; }
         public bool success { get; set; }
         public int status { get; set; }
+        public JToken errors { get; set; }
     }
 
     internal class ImgurErrorData

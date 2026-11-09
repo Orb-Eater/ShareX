@@ -1438,6 +1438,7 @@ namespace ShareX
             {
                 CopyImageRequested = (skBitmap) =>
                 {
+                    DebugHelper.WriteLine($"Image editor: Copy ({skBitmap.Width}x{skBitmap.Height}).");
                     using Bitmap img = skBitmap.Copy();
                     CopyImageOnUiThread(img);
                 },
@@ -1452,7 +1453,10 @@ namespace ShareX
                         newFilePath = Path.Combine(screenshotsFolder, fileName);
                     }
 
-                    SkiaImageHelpers.SaveImage(img, newFilePath);
+                    bool saved = SkiaImageHelpers.SaveImage(img, newFilePath);
+                    DebugHelper.WriteLine(saved
+                        ? $"Image editor: Save, {img.Width}x{img.Height} saved to file: {newFilePath}"
+                        : $"Image editor: Save, {img.Width}x{img.Height} not saved: {newFilePath}");
                     return newFilePath;
                 },
                 SaveImageAsRequested = (skBitmap, newFilePath) =>
@@ -1467,6 +1471,9 @@ namespace ShareX
                     }
 
                     newFilePath = SkiaImageHelpers.SaveImageFileDialog(img, newFilePath);
+                    DebugHelper.WriteLine(string.IsNullOrEmpty(newFilePath)
+                        ? $"Image editor: Save as ({img.Width}x{img.Height}), nothing saved."
+                        : $"Image editor: Save as, {img.Width}x{img.Height} saved to file: {newFilePath}");
                     return newFilePath;
                 },
                 PrintImageRequested = (skBitmap) =>
@@ -1481,6 +1488,7 @@ namespace ShareX
                 },
                 UploadImageRequested = (skBitmap) =>
                 {
+                    DebugHelper.WriteLine($"Image editor: Upload ({skBitmap.Width}x{skBitmap.Height}).");
                     Bitmap bmp = skBitmap.Copy();
                     UploadImageOnUiThread(bmp, taskSettings);
                 }
