@@ -182,6 +182,10 @@ internal static class Program
                 await new CaptureRegion().PrewarmAsync(TaskSettings.GetDefaultTaskSettings());
                 await Task.Delay(200);
             }
+
+            // Let the spare window (posted at Background priority) be built first.
+            await Task.Delay(500);
+            await WarmUpMemoryRelease.RunAsync();
         }
         catch (Exception e)
         {
