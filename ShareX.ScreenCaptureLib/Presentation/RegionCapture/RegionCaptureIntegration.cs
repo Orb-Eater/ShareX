@@ -146,6 +146,14 @@ public static class RegionCaptureIntegration
             return Task.FromException<AvaloniaRegionCaptureResult?>(ex);
         }
 
+        // A warm-up window that cannot sit entirely above the desktop (a very tall capture area) would show on screen.
+        if (request.Prewarm && !RegionCaptureWindow.CanWarmUpOffScreen(request.ScreenBounds, CaptureHelpers.GetScreenBounds().Y))
+        {
+            request.Screenshot.Dispose();
+            request.CursorBitmap?.Dispose();
+            return Task.FromResult<AvaloniaRegionCaptureResult?>(null);
+        }
+
         TaskCompletionSource<AvaloniaRegionCaptureResult?> completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 

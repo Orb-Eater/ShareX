@@ -2039,9 +2039,20 @@ public partial class RegionCaptureWindow : Window
     }
 
     // A warm-up window sits far above the desktop, never on screen. On staggered mixed-DPI layouts its DPI can differ.
-    private int WindowY => _request!.Prewarm
-        ? _request.ScreenBounds.Y - _request.ScreenBounds.Height - 20000
-        : _request.ScreenBounds.Y;
+    private int WindowY => _request!.Prewarm ? GetWarmUpY(_request.ScreenBounds) : _request.ScreenBounds.Y;
+
+    // Some window messages carry positions as 16-bit values, so stay well above -32768.
+    private const int LowestWindowY = -32000;
+
+    private static int GetWarmUpY(DrawingRectangle screenBounds) =>
+        Math.Max(LowestWindowY, screenBounds.Y - screenBounds.Height - 20000);
+
+    /// <summary>
+    /// False when a warm-up window for these bounds cannot be placed entirely above the desktop,
+    /// whose top edge is <paramref name="desktopTop"/>.
+    /// </summary>
+    internal static bool CanWarmUpOffScreen(DrawingRectangle screenBounds, int desktopTop) =>
+        GetWarmUpY(screenBounds) + screenBounds.Height <= desktopTop;
 
     private void ApplyPixelSize()
     {
