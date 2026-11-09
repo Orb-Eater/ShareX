@@ -33,6 +33,8 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace ShareX.ScreenCaptureLib.Presentation.RegionCapture;
@@ -55,6 +57,7 @@ public static class RegionCaptureIntegration
     // Built ahead of the next capture on an idle UI thread, because loading the window takes longer than using it.
     private static RegionCaptureWindow? _spareWindow;
     private static CultureInfo? _spareWindowCulture;
+    private static string? _spareWindowScreens;
     private static int _openCaptures;
 
     /// <summary>True while a real capture overlay is open. Warm-up runs do not count.</summary>
@@ -64,9 +67,12 @@ public static class RegionCaptureIntegration
     {
         try
         {
-            if (_spareWindow == null)
+            // Building it takes 100 ms or more on the UI thread, which would stall an open overlay.
+            // The capture that is open posts this again when it closes.
+            if (_spareWindow == null && !IsCaptureOpen)
             {
                 _spareWindowCulture = CultureInfo.CurrentUICulture;
+                _spareWindowScreens = GetScreenSetup();
                 _spareWindow = new RegionCaptureWindow();
             }
         }
@@ -75,6 +81,53 @@ public static class RegionCaptureIntegration
             DebugHelper.WriteException(ex);
         }
     }
+
+    // Bounds and DPI of every monitor, read fresh from Windows. A spare window built for another screen setup
+    // could open with the wrong scale.
+    private static string GetScreenSetup()
+    {
+        StringBuilder setup = new();
+
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (monitor, dc, rect, data) =>
+        {
+            MONITORINFO info = new() { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            GetMonitorInfo(monitor, ref info);
+            if (GetDpiForMonitor(monitor, 0, out uint dpiX, out uint dpiY) != 0) dpiX = dpiY = 0;
+            setup.Append(info.rcMonitor.left).Append(',').Append(info.rcMonitor.top).Append(',')
+                .Append(info.rcMonitor.right).Append(',').Append(info.rcMonitor.bottom).Append('@')
+                .Append(dpiX).Append(',').Append(dpiY).Append(';');
+            return true;
+        }, IntPtr.Zero);
+
+        return setup.ToString();
+    }
+
+    private delegate bool MonitorEnumProc(IntPtr monitor, IntPtr dc, IntPtr rect, IntPtr data);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int left, top, right, bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
+
+    [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+    // dpiType 0: MDT_EFFECTIVE_DPI.
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
 
     public static Task<AvaloniaRegionCaptureResult?> CaptureAsync(AvaloniaRegionCaptureRequest request)
     {
@@ -106,8 +159,10 @@ public static class RegionCaptureIntegration
                 ImageEditorIntegration.Initialize();
                 RegionCaptureWindow? spare = _spareWindow;
                 _spareWindow = null;
-                // A spare built before a language change would show the old language. One that was closed cannot be shown.
-                if (spare != null && (spare.TryGetPlatformHandle() == null || !Equals(_spareWindowCulture, CultureInfo.CurrentUICulture)))
+                // A spare built before a language change would show the old language, and one built before a
+                // display change could have the wrong scale. One that was closed cannot be shown.
+                if (spare != null && (spare.TryGetPlatformHandle() == null || !Equals(_spareWindowCulture, CultureInfo.CurrentUICulture) ||
+                    _spareWindowScreens != GetScreenSetup()))
                 {
                     spare.Close(); // A window that was never shown must still be closed, or its HWND stays alive.
                     spare = null;
@@ -115,7 +170,6 @@ public static class RegionCaptureIntegration
                 window = spare ?? new RegionCaptureWindow();
                 window.Bind(request);
                 AvaloniaRegionCaptureResult? result = await window.CaptureAsync();
-                Dispatcher.UIThread.Post(CreateSpareWindow, DispatcherPriority.Background);
                 completion.TrySetResult(result);
             }
             catch (Exception ex)
@@ -131,6 +185,7 @@ public static class RegionCaptureIntegration
             finally
             {
                 if (!request.Prewarm) _openCaptures--;
+                Dispatcher.UIThread.Post(CreateSpareWindow, DispatcherPriority.Background);
             }
         });
 
