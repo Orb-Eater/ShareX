@@ -501,7 +501,7 @@ public partial class RegionCaptureWindow : Window
             Helpers.EnsureWindowPosition(this, _request.ScreenBounds.X, WindowY);
             UpdatePixelTransforms();
             _editorWorkspace.ConfigureForFullscreenWorkspace();
-            _editorWorkspace.LoadWorkspaceImage(_request.Screenshot);
+            _editorWorkspace.LoadWorkspaceImage(_request.Screenshot, _request.ScreenshotIsOpaque);
             _workspaceOwnsScreenshot = true;
 
             if (_request.CursorBitmap != null)

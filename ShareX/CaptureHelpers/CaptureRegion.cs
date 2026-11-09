@@ -89,6 +89,8 @@ namespace ShareX
             {
                 Prewarm = _prewarm,
                 Screenshot = frozenScreenshot,
+            // Screen captures are opaque: WindowsImageInterop.Capture and HDR correction set alpha to 255.
+            ScreenshotIsOpaque = true,
                 ScreenBounds = screenBounds,
                 // The window writes some values back to these options, and a warm-up must not change saved settings.
                 RegionCaptureOptions = _prewarm
