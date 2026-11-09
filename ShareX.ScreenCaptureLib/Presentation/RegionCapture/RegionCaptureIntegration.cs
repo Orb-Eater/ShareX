@@ -90,13 +90,22 @@ public static class RegionCaptureIntegration
 
         EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (monitor, dc, rect, data) =>
         {
-            MONITORINFO info = new() { cbSize = Marshal.SizeOf<MONITORINFO>() };
-            GetMonitorInfo(monitor, ref info);
-            if (GetDpiForMonitor(monitor, 0, out uint dpiX, out uint dpiY) != 0) dpiX = dpiY = 0;
-            setup.Append(info.rcMonitor.left).Append(',').Append(info.rcMonitor.top).Append(',')
-                .Append(info.rcMonitor.right).Append(',').Append(info.rcMonitor.bottom).Append('@')
-                .Append(dpiX).Append(',').Append(dpiY).Append(';');
-            return true;
+            // An exception must not cross the native callback frame: stop and return what was read so far.
+            try
+            {
+                MONITORINFO info = new() { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                GetMonitorInfo(monitor, ref info);
+                if (GetDpiForMonitor(monitor, 0, out uint dpiX, out uint dpiY) != 0) dpiX = dpiY = 0;
+                setup.Append(info.rcMonitor.left).Append(',').Append(info.rcMonitor.top).Append(',')
+                    .Append(info.rcMonitor.right).Append(',').Append(info.rcMonitor.bottom).Append('@')
+                    .Append(dpiX).Append(',').Append(dpiY).Append(';');
+                return true;
+            }
+            catch
+            {
+                setup.Append("error;");
+                return false;
+            }
         }, IntPtr.Zero);
 
         return setup.ToString();

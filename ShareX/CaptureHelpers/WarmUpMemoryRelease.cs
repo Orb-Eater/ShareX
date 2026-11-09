@@ -54,7 +54,8 @@ internal static class WarmUpMemoryRelease
 
         if (RegionCaptureIntegration.IsCaptureOpen) return;
 
-        // Off the UI thread, so a hotkey pressed meanwhile does not wait for the finalizers.
+        // Off the UI thread, so a hotkey pressed meanwhile does not wait for the finalizers. The collections
+        // themselves still pause every thread briefly, as any blocking collection does.
         // An aggressive collection also hands the GC's free space back to Windows, which a normal one keeps.
         await Task.Run(() =>
         {
@@ -63,14 +64,13 @@ internal static class WarmUpMemoryRelease
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         });
 
+        // Checked and trimmed back to back on the UI thread (it takes milliseconds), so a capture cannot open in
+        // between and have its fresh memory paged out.
         if (RegionCaptureIntegration.IsCaptureOpen) return;
 
         // The warm-up touched memory that is only needed again at the next capture.
-        await Task.Run(() =>
-        {
-            using Process self = Process.GetCurrentProcess();
-            NativeMethods.SetProcessWorkingSetSize(self.Handle, (IntPtr)(-1), (IntPtr)(-1));
-        });
+        using Process self = Process.GetCurrentProcess();
+        NativeMethods.SetProcessWorkingSetSize(self.Handle, (IntPtr)(-1), (IntPtr)(-1));
     }
 
     // A closed window's GPU surfaces are only destroyed at the next rendered frame, and a tray-only ShareX renders
