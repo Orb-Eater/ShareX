@@ -68,13 +68,14 @@ internal static class AvaloniaClipboard
         return true;
     });
 
-    public static bool SetImage(byte[] png, byte[] dib, string html) => DesktopServices.Run(async () =>
+    // Returns false, writing nothing, when stillWanted says no just before the write.
+    public static bool SetImage(byte[] png, byte[] dib, string html, Func<bool> stillWanted = null) => DesktopServices.Run(async () =>
     {
         if (OperatingSystem.IsWindows())
         {
-            WindowsClipboard.SetImage(DesktopServices.GetWindow().TryGetPlatformHandle()?.Handle ?? IntPtr.Zero, png, dib, html);
-            return true;
+            return WindowsClipboard.SetImage(DesktopServices.GetWindow().TryGetPlatformHandle()?.Handle ?? IntPtr.Zero, png, dib, html, stillWanted);
         }
+        if (stillWanted != null && !stillWanted()) return false;
         OwnedImageTransfer owned = CreateImageTransfer(png, html);
         try { await Clipboard.SetDataAsync(owned); }
         catch { owned.Dispose(); throw; }

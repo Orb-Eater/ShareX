@@ -329,6 +329,9 @@ namespace ShareX.HelpersLib
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool EmptyClipboard();
 
+        [DllImport("user32.dll")]
+        public static extern uint GetClipboardSequenceNumber();
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
 

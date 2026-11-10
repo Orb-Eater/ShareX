@@ -33,7 +33,7 @@ namespace ShareX.ImageEditor.Integration;
 public interface IClipboardService
 {
     /// <summary>
-    /// Sets an image to the clipboard.
+    /// Sets an image to the clipboard. Called off the UI thread; the caller keeps ownership of the bitmap.
     /// </summary>
     void SetImage(SKBitmap bitmap);
 

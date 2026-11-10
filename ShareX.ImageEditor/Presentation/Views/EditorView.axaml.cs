@@ -2246,6 +2246,20 @@ namespace ShareX.ImageEditor.Presentation.Views
             if (DataContext is not MainViewModel vm) return;
             if (vm.HasHostCopyHandler) return;
 
+            // A host clipboard writes the image at once. Avalonia's copy below is never flushed: every paste calls
+            // back into this process, and the image is gone when the process exits.
+            if (EditorServices.Clipboard is IClipboardService hostClipboard)
+            {
+                using SKBitmap? snapshot = GetSnapshot();
+                if (snapshot == null) return;
+
+                EditorServices.ReportInformation(nameof(EditorView), $"Copy: image {snapshot.Width}x{snapshot.Height} sent to the host clipboard.");
+                // The host writer encodes PNG and DIB first (about 1 s for a 5120x2520 desktop): keep that off the UI thread,
+                // so the overlay stays responsive. The snapshot is this method's own copy, released only after the write.
+                await Task.Run(() => hostClipboard.SetImage(snapshot));
+                return;
+            }
+
             TopLevel? topLevel = TopLevel.GetTopLevel(this);
             IClipboard? clipboard = topLevel?.Clipboard;
             if (clipboard == null) return;

@@ -64,7 +64,11 @@ namespace ShareX.HelpersLib
             catch (Exception e) { DebugHelper.WriteException(e, "Clipboard copy text failed."); return false; }
         }
 
-        public static bool CopyImage(Image img, string fileName = null)
+        public static uint SequenceNumber => OperatingSystem.IsWindows() ? WindowsClipboard.SequenceNumber : 0;
+
+        // stillWanted, if given, is asked just before the write; false leaves the clipboard as it is. A copy that is
+        // prepared off the UI thread uses it so that it does not overwrite a newer copy.
+        public static bool CopyImage(Image img, string fileName = null, Func<bool> stillWanted = null)
         {
             if (img == null) return false;
             string size = "unknown size";
@@ -76,14 +80,14 @@ namespace ShareX.HelpersLib
                 byte[] pngBytes = png.ToArray();
                 byte[] dib = OperatingSystem.IsWindows() ? CreateDib(img) : null;
                 string html = CreateImageHtml(fileName);
-                bool copied = AvaloniaClipboard.SetImage(pngBytes, dib, html);
+                bool copied = AvaloniaClipboard.SetImage(pngBytes, dib, html, stillWanted);
                 // One line per image copy: the size and formats tell what another app could paste.
                 // KB rounded up, so a small image never shows as 0 KB.
                 string formats = string.Join(" + ", new[] { dib != null ? $"DIB {(dib.Length + 1023) / 1024} KB" : null,
                     $"PNG {(pngBytes.Length + 1023) / 1024} KB", html != null ? "HTML" : null }.Where(format => format != null));
                 DebugHelper.WriteLine(copied
                     ? $"Clipboard: image {size} written as {formats}."
-                    : $"Clipboard: image {size} was not written ({formats}).");
+                    : $"Clipboard: image {size} was not written ({formats}): the clipboard changed while it was being prepared.");
                 return copied;
             }
             catch (Exception e) { DebugHelper.WriteException(e, $"Clipboard copy image failed ({size})."); return false; }

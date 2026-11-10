@@ -254,21 +254,21 @@ public partial class RegionCaptureWindow : Window
             FocusManager?.GetFocusedElement() is not TextBox)
         {
             e.Handled = true;
-            CompleteSelection();
+            CompleteSelection("Enter pressed");
             return;
         }
 
         if (_regionToolActive && e.Key == Key.Space)
         {
             e.Handled = true;
-            Complete(new Rect(0, 0, _imageWidth, _imageHeight), includeWindowInfo: false);
+            Complete(new Rect(0, 0, _imageWidth, _imageHeight), "Space pressed (full screen)", includeWindowInfo: false);
             return;
         }
 
         if (_regionToolActive && e.Key == Key.OemTilde)
         {
             e.Handled = true;
-            CompleteActiveMonitor();
+            CompleteActiveMonitor("active monitor key pressed"); // OemTilde: ~ on US keyboards, another key on others
             return;
         }
 
@@ -687,21 +687,21 @@ public partial class RegionCaptureWindow : Window
 
         if (properties.IsMiddleButtonPressed)
         {
-            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionMiddleClick);
+            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionMiddleClick, "middle click");
             e.Handled = true;
             return;
         }
 
         if (properties.IsXButton1Pressed)
         {
-            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionX1Click);
+            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionX1Click, "mouse button 4 click");
             e.Handled = true;
             return;
         }
 
         if (properties.IsXButton2Pressed)
         {
-            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionX2Click);
+            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionX2Click, "mouse button 5 click");
             e.Handled = true;
             return;
         }
@@ -713,7 +713,7 @@ public partial class RegionCaptureWindow : Window
 
         if (e.ClickCount >= 2 && IsPointInAnyRegion(point))
         {
-            CompleteSelection();
+            CompleteSelection("double-click in a region");
             e.Handled = true;
             return;
         }
@@ -881,7 +881,7 @@ public partial class RegionCaptureWindow : Window
 
         if (HasValidSelection() && IsQuickCapture)
         {
-            Complete(_regionOverlay.SelectionRectangle);
+            Complete(_regionOverlay.SelectionRectangle, "mouse released");
         }
         else
         {
@@ -923,7 +923,7 @@ public partial class RegionCaptureWindow : Window
         }
         else if (_request != null)
         {
-            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionRightClick);
+            RunCaptureAction(_request.RegionCaptureOptions.RegionCaptureActionRightClick, "right click");
         }
 
         e.Handled = true;
@@ -1130,7 +1130,8 @@ public partial class RegionCaptureWindow : Window
             e.Handled = true;
             RunAnnotationCaptureAction(
                 _request.RegionCaptureOptions.RegionCaptureActionMiddleClick,
-                e.GetPosition(_editorWorkspace));
+                e.GetPosition(_editorWorkspace),
+                "middle click");
             return;
         }
 
@@ -1186,7 +1187,8 @@ public partial class RegionCaptureWindow : Window
         _annotationRightButtonPressed = false;
         RunAnnotationCaptureAction(
             _request.RegionCaptureOptions.RegionCaptureActionRightClick,
-            e.GetPosition(_editorWorkspace));
+            e.GetPosition(_editorWorkspace),
+            "right click");
         e.Handled = true;
     }
 
@@ -1222,7 +1224,7 @@ public partial class RegionCaptureWindow : Window
         return false;
     }
 
-    private void RunAnnotationCaptureAction(RegionCaptureAction action, Point workspacePoint)
+    private void RunAnnotationCaptureAction(RegionCaptureAction action, Point workspacePoint, string button)
     {
         if (_request == null)
         {
@@ -1233,7 +1235,7 @@ public partial class RegionCaptureWindow : Window
         {
             if (!_editorWorkspace.DeleteWorkspaceAnnotationAt(workspacePoint))
             {
-                CancelCapture($"{action} click with no shape under the pointer");
+                CancelCapture($"{button} ({action}) with no shape under the pointer");
             }
         }
         else if (action == RegionCaptureAction.RemoveShape)
@@ -1242,7 +1244,7 @@ public partial class RegionCaptureWindow : Window
         }
         else
         {
-            RunCaptureAction(action);
+            RunCaptureAction(action, button);
         }
     }
 
@@ -1708,24 +1710,27 @@ public partial class RegionCaptureWindow : Window
         }
     }
 
-    private void RunCaptureAction(RegionCaptureAction action)
+    // button names the mouse button for the log, e.g. "right click".
+    private void RunCaptureAction(RegionCaptureAction action, string button)
     {
         if (_request == null)
         {
             return;
         }
 
+        string trigger = $"{button} ({action})";
+
         switch (action)
         {
             case RegionCaptureAction.None:
                 break;
             case RegionCaptureAction.CancelCapture:
-                CancelCapture($"{action} click");
+                CancelCapture(trigger);
                 break;
             case RegionCaptureAction.RemoveShapeCancelCapture:
                 if (!TryRemoveRegionAt(_lastPointerPoint))
                 {
-                    CancelCapture($"{action} click with no region under the pointer");
+                    CancelCapture($"{trigger} with no region under the pointer");
                 }
                 break;
             case RegionCaptureAction.RemoveShape:
@@ -1742,18 +1747,18 @@ public partial class RegionCaptureWindow : Window
                 }
                 break;
             case RegionCaptureAction.CaptureFullscreen:
-                Complete(new Rect(0, 0, _imageWidth, _imageHeight), includeWindowInfo: false);
+                Complete(new Rect(0, 0, _imageWidth, _imageHeight), trigger, includeWindowInfo: false);
                 break;
             case RegionCaptureAction.CaptureActiveMonitor:
-                CompleteActiveMonitor();
+                CompleteActiveMonitor(trigger);
                 break;
             case RegionCaptureAction.CaptureLastRegion:
-                CompleteLastRegion();
+                CompleteLastRegion(trigger);
                 break;
         }
     }
 
-    private void CompleteLastRegion()
+    private void CompleteLastRegion(string trigger)
     {
         if (_request == null || RegionCaptureIntegration.LastRegionRectangle.IsEmpty)
         {
@@ -1778,10 +1783,10 @@ public partial class RegionCaptureWindow : Window
             }
         }
 
-        Complete(regions, includeWindowInfo: false);
+        Complete(regions, trigger, includeWindowInfo: false);
     }
 
-    private void CompleteActiveMonitor()
+    private void CompleteActiveMonitor(string trigger)
     {
         if (_request == null)
         {
@@ -1804,24 +1809,26 @@ public partial class RegionCaptureWindow : Window
             screen.Bounds.Height);
         Complete(RegionSelectionOverlay.Intersect(relative,
             new Rect(0, 0, _imageWidth, _imageHeight)),
+            trigger,
             includeWindowInfo: false);
     }
 
-    private void CompleteSelection()
+    private void CompleteSelection(string trigger)
     {
-        Complete(GetSelectedRegions());
+        Complete(GetSelectedRegions(), trigger);
     }
 
-    private void Complete(Rect selection, bool includeWindowInfo = true)
+    private void Complete(Rect selection, string trigger, bool includeWindowInfo = true)
     {
-        Complete([selection], includeWindowInfo);
+        Complete([selection], trigger, includeWindowInfo);
     }
 
     /// <summary>
     /// Captures the bounds of <paramref name="selections"/>. With more than one region, pixels outside
     /// every region are transparent, matching multi region mode in the classic region capture.
+    /// <paramref name="trigger"/> says what ended the capture, for the log.
     /// </summary>
-    private void Complete(IReadOnlyList<Rect> selections, bool includeWindowInfo = true)
+    private void Complete(IReadOnlyList<Rect> selections, string trigger, bool includeWindowInfo = true)
     {
         if (_closing || _request == null)
         {
@@ -1876,7 +1883,7 @@ public partial class RegionCaptureWindow : Window
             windowInfo,
             _viewModel?.IsDirty == true);
         RegionCaptureIntegration.SetLastRegion(screenRectangle, regions.Select(ToScreenRectangle).ToArray());
-        EndReason = regions.Count > 1 ? $"{regions.Count} regions selected" : "region selected";
+        EndReason = regions.Count > 1 ? $"{trigger}, {regions.Count} regions" : trigger;
         _closing = true;
         Close();
     }

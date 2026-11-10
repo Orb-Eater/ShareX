@@ -42,17 +42,23 @@ internal static class WindowsClipboard
     private const int OpenRetryCount = 10;
     private const int OpenRetryDelay = 50;
 
-    public static void SetImage(IntPtr owner, byte[] png, byte[] dib, string html)
+    public static uint SequenceNumber => NativeMethods.GetClipboardSequenceNumber();
+
+    // Returns false, writing nothing, when stillWanted says no. It is asked with the clipboard open,
+    // so nothing can change the clipboard between the answer and the write.
+    public static bool SetImage(IntPtr owner, byte[] png, byte[] dib, string html, Func<bool> stillWanted = null)
     {
         // A null owner makes SetClipboardData fail after EmptyClipboard.
         if (owner == IntPtr.Zero) throw new InvalidOperationException("Clipboard owner window is unavailable.");
         Open(owner);
         try
         {
+            if (stillWanted != null && !stillWanted()) return false;
             if (!NativeMethods.EmptyClipboard()) throw new Win32Exception();
             SetData(CF_DIB, dib);
             if (png != null) SetData(RegisterFormat(ClipboardHelpers.FORMAT_PNG), png);
             if (!string.IsNullOrEmpty(html)) SetData(RegisterFormat(ClipboardDataFormats.Html), Encoding.UTF8.GetBytes(html + "\0"));
+            return true;
         }
         finally
         {

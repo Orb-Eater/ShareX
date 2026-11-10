@@ -209,9 +209,28 @@ internal static class Program
         return shape.ToString();
     }
 
+    // The image editor's own Copy (in the region capture overlay, which sets no copy handler) used Avalonia's clipboard,
+    // which is never flushed: every paste called back into ShareX, and the image was gone once ShareX quit.
+    // It now goes through ShareX's clipboard writer like every other image copy: PNG + DIB at once, and one log line.
+    private sealed class EditorClipboard : IClipboardService
+    {
+        // Runs off the UI thread while PNG and DIB are encoded (about 1 s for a 5120x2520 desktop). The clipboard is
+        // emptied first, so a paste meanwhile can't give the previous item, and the image is written only if nothing
+        // else copied since: a newer copy (an after-capture copy, another app) must not be overwritten by this one.
+        public void SetImage(SkiaSharp.SKBitmap bitmap)
+        {
+            ClipboardHelpers.Clear();
+            uint sequence = ClipboardHelpers.SequenceNumber;
+            ClipboardHelpers.CopyImage(bitmap, stillWanted: () => ClipboardHelpers.SequenceNumber == sequence);
+        }
+
+        public SkiaSharp.SKBitmap? GetImage() => ClipboardHelpers.GetImage();
+    }
+
     private static async Task StartApplicationAsync()
     {
         ConnectImageEditorLog();
+        EditorServices.Clipboard ??= new EditorClipboard();
         ImageEditorIntegration.Initialize();
 
         if (ApplicationState.Settings.ShowStartScreen)

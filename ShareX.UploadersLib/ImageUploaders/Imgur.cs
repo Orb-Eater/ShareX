@@ -365,6 +365,10 @@ namespace ShareX.UploadersLib.ImageUploaders
                             result.ThumbnailURL = $"https://i.imgur.com/{imageData.id}{thumbnail}.jpg"; // Imgur thumbnails always jpg
                             result.DeletionURL = $"https://imgur.com/delete/{imageData.deletehash}";
                         }
+                        else
+                        {
+                            AddReplyError(imgurResponse, result, "the reply has no link");
+                        }
                     }
                     else
                     {
@@ -385,11 +389,25 @@ namespace ShareX.UploadersLib.ImageUploaders
                             Errors.AddFirst(string.Format(Localization.Strings.Imgur_Upload_failed,
                                 imgurResponse.status, errorData.error));
                         }
+                        else
+                        {
+                            AddReplyError(imgurResponse, result, "no error details in the reply");
+                        }
                     }
                 }
             }
 
             return result;
+        }
+
+        // A reply that leaves no URL must still count as a failure, so the task says why and the upload retry runs,
+        // instead of ending as "URL is empty". A non-2xx reply was already reported by the base uploader: keep that one.
+        private void AddReplyError(ImgurResponse response, UploadResult result, string reason)
+        {
+            if (Errors.Count > 0) return;
+
+            int status = response.status != 0 ? response.status : (int?)result.ResponseInfo?.StatusCode ?? 0;
+            Errors.AddFirst(string.Format(Localization.Strings.Imgur_Upload_failed, status, reason));
         }
 
         private void HandleErrors(ImgurResponse response)
