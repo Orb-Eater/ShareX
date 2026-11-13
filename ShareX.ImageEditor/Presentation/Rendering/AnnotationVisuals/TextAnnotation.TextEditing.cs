@@ -210,7 +210,7 @@ public partial class TextAnnotation
 
     /// <summary>
     /// The horizontal range a never-resized centred or right-aligned box is kept inside while it fits, in annotation
-    /// pixels (ClampAnchoredLeft). The default value is no range: the box is not limited.
+    /// pixels (ClampAnchoredLeft). An infinite side is not limited. The default value is no range: not limited at all.
     /// </summary>
     internal readonly record struct AnchorLimits(double Left, double Right)
     {
@@ -218,9 +218,12 @@ public partial class TextAnnotation
     }
 
     /// <summary>
-    /// The range for this text in an image of the given width: the image, widened to what the rectangle covers
-    /// now, before it is typed in or restyled. A text that already sticks out of the image is then not pulled inside
-    /// by opening or restyling it; it only does not go further out. Not limited without a real width.
+    /// The range for this text in an image of the given width, from the rectangle it has now, before it is typed in
+    /// or restyled: the image. A side the rectangle already sticks out of is not limited: that text is outside on
+    /// purpose, so opening or restyling it must not pull it in, and it grows and shrinks around the point its
+    /// alignment holds there, both ways the same (a limit at its present edge made it move inwards when it grew, so
+    /// bold off and on again did not come back). Out by no more than the canvas growth tolerates counts as rounding:
+    /// that side is limited at where the rectangle is, so it does not move either. Not limited without a real width.
     /// </summary>
     internal AnchorLimits GetAnchorLimits(double imageWidth)
     {
@@ -231,7 +234,10 @@ public partial class TextAnnotation
 
         SKRect stored = GetStoredBounds();
         HorizontalSpan(stored.Left, (double)stored.Right - stored.Left, (double)stored.Bottom - stored.Top, RotationAngle, out double spanLeft, out double spanRight);
-        return new AnchorLimits(Math.Min(0, spanLeft), Math.Max(imageWidth, spanRight));
+        const double tolerance = Editor.EditorCore.AutoExpandTolerance;
+        return new AnchorLimits(
+            spanLeft < -tolerance ? double.NegativeInfinity : Math.Min(0, spanLeft),
+            spanRight > imageWidth + tolerance ? double.PositiveInfinity : Math.Max(imageWidth, spanRight));
     }
 
     /// <summary>
