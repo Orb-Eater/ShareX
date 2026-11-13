@@ -192,7 +192,7 @@ namespace ShareX.ImageEditor.Presentation.Controls
             // it: the caret goes there and the box grows by a line. FormattedText.Height does not, so the letters were
             // centred in the box half a line lower than the text box's own lines, and the caret on the empty line sat
             // on top of them. A space on that line counts it without drawing anything.
-            double textHeight = text.EndsWith('\n') || text.EndsWith('\r')
+            double textHeight = EndsWithLineBreak(text)
                 ? Layout(text + " ").Height
                 : formattedText.Height;
             double originX = horizontalPadding;
@@ -234,6 +234,14 @@ namespace ShareX.ImageEditor.Presentation.Controls
                     context.DrawGeometry(fillBrush, null, textGeometry);
                 }
             }
+        }
+
+        // Every character the text layout ends a line on: line feed, carriage return, next line (U+0085), line and
+        // paragraph separator (U+2028, U+2029), vertical tab and form feed. Typing only gives the first; the rest can
+        // come in by paste (review of 389f3460a).
+        private static bool EndsWithLineBreak(string text)
+        {
+            return text.Length > 0 && text[^1] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029' or '\v' or '\f';
         }
 
         protected override Size MeasureOverride(Size availableSize)
