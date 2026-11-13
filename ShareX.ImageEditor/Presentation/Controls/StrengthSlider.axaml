@@ -6,17 +6,39 @@
              x:Class="ShareX.ImageEditor.Presentation.Controls.StrengthSlider"
              x:Name="StrengthSliderRoot">
 
+    <UserControl.Styles>
+        <!-- Transparent at rest so the slot stays the same size and colour. The hover
+             wash is the same one the toolbar buttons use, and it is a style (not a
+             local value) so it can replace the resting background. -->
+        <Style Selector="Border#ValueHost">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="CornerRadius" Value="2"/>
+        </Style>
+        <Style Selector="Border#ValueHost:pointerover:not(.editing)">
+            <Setter Property="Background" Value="{DynamicResource ShareX.Brush.Control.Background.Hover}"/>
+        </Style>
+    </UserControl.Styles>
+
     <Grid ColumnDefinitions="Auto,*" Height="40" VerticalAlignment="Center">
-        <!-- Strength Label -->
-        <TextBlock Grid.Column="0"
-                   Text="{Binding Value, ElementName=StrengthSliderControl, StringFormat='{}{0:F0}'}"
-                   Foreground="{DynamicResource ShareX.Brush.Text.Secondary}"
-                   FontSize="12"
-                   VerticalAlignment="Center"
-                   Width="24"
-                   TextAlignment="Center"
-                   Margin="0,0,5,0"/>
-        
+        <!-- The number. Width and margin match the old text block, so the toolbar does not grow. -->
+        <Border x:Name="ValueHost"
+                Grid.Column="0"
+                Width="24"
+                Margin="0,0,5,0"
+                Cursor="IBeam"
+                PointerPressed="OnValuePointerPressed">
+            <Grid x:Name="ValueHostGrid">
+                <TextBlock x:Name="ValueLabel"
+                           Text="{Binding Value, ElementName=StrengthSliderControl, StringFormat='{}{0:F0}'}"
+                           Foreground="{DynamicResource ShareX.Brush.Text.Secondary}"
+                           FontSize="12"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Stretch"
+                           TextAlignment="Center"
+                           IsHitTestVisible="False"/>
+            </Grid>
+        </Border>
+
         <!-- Slider -->
         <Slider x:Name="StrengthSliderControl"
                 Grid.Column="1"
