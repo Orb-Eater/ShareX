@@ -76,7 +76,33 @@ namespace ShareX.ImageEditor.Presentation.Controls
         // From the annotation's coordinates to those of the canvas the box is on (the overlay is offset by its bleed).
         private Vector? _parentOffset;
 
+        // Image width in annotation pixels, read while the box is open. Captured on the first measure so a live
+        // canvas growth to the right does not move a box that was already stopped at an edge.
+        private Func<double>? _imageWidth;
+        private double? _anchorLimitWidth;
+
         internal void FollowAnchor() => _followAnchor = true;
+
+        internal void UseImageWidth(Func<double> imageWidth) => _imageWidth = imageWidth;
+
+        /// <summary>The image width this box is kept inside, or positive infinity when it is not limited.</summary>
+        internal double AnchorLimitWidth => _anchorLimitWidth ?? double.PositiveInfinity;
+
+        private double CurrentAnchorLimit()
+        {
+            if (_anchorLimitWidth is double captured)
+            {
+                return captured;
+            }
+
+            double live = _imageWidth?.Invoke() ?? double.PositiveInfinity;
+            if (live > 1 && !double.IsInfinity(live))
+            {
+                _anchorLimitWidth = live;
+            }
+
+            return _anchorLimitWidth ?? double.PositiveInfinity;
+        }
 
         // The box is placed here, in its own measure, from the size it is about to take: the canvas arranges it in
         // the same layout pass, so the box never shows a frame at the old place with the new size.
@@ -110,8 +136,9 @@ namespace ShareX.ImageEditor.Presentation.Controls
                 size = Avalonia.Layout.LayoutHelper.RoundLayoutSizeUp(size, Avalonia.Layout.LayoutHelper.GetLayoutScale(this));
             }
 
-            Point topLeft = TextAnnotation.GetAnchoredTopLeft(from, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle)
-                + _parentOffset.Value;
+            Point anchored = TextAnnotation.GetAnchoredTopLeft(from, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle);
+            double x = TextAnnotation.ClampAnchoredLeft(anchored.X, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle, CurrentAnchorLimit());
+            Point topLeft = new Point(x, anchored.Y) + _parentOffset.Value;
 
             if (Math.Abs(topLeft.X - left) > 0.001)
             {

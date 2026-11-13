@@ -1606,6 +1606,12 @@ public class EditorInputController
         ApplyShadowOptions(textAnnotation, vm);
 
         var textBox = textAnnotation.CreateCreationTextEditor(brush);
+        if (textBox is TextAnnotationEditorBox anchoredBox)
+        {
+            // Kept inside the image while typing. The width is read on each measure and the box remembers the
+            // first one, which is the image before any live growth to the right.
+            anchoredBox.UseImageWidth(() => _view?.EditorCore?.CanvasSize.Width ?? double.PositiveInfinity);
+        }
 
         Canvas.SetLeft(textBox, _startPoint.X);
         Canvas.SetTop(textBox, _startPoint.Y);
@@ -1668,7 +1674,8 @@ public class EditorInputController
                             // Keeping still the point its alignment holds, as the text box did (SetCreatedText already
                             // gave it this size; this only changes it if the control measures otherwise), stored so
                             // that the size is never a hair over: see TextAnnotation.SetSize.
-                            annotation.SetSizeAnchored(desiredWidth, desiredHeight);
+                            double limit = tb is TextAnnotationEditorBox anchored ? anchored.AnchorLimitWidth : double.PositiveInfinity;
+                            annotation.SetSizeAnchored(desiredWidth, desiredHeight, limit);
 
                             AnnotationVisualFactory.UpdateVisualControl(
                                 control,

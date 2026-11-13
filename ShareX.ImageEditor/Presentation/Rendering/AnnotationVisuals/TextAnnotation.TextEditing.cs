@@ -77,8 +77,10 @@ public partial class TextAnnotation
 
         // Whole pixels, stored so that they are never a hair over (SetSize), as an edited text gets them: a raw size
         // stored as floats could lay out one pixel off the box the text was typed in. The rectangle is the click
-        // point until now; it grows from there as the text box did (SetSizeAnchored).
-        SetSizeAnchored(Math.Ceiling(width), Math.Ceiling(height));
+        // point until now; it grows from there as the text box did (SetSizeAnchored). The limit is the image width
+        // the box was kept inside while typing, so finishing lands on that same box.
+        double limit = textBox is TextAnnotationEditorBox editor ? editor.AnchorLimitWidth : double.PositiveInfinity;
+        SetSizeAnchored(Math.Ceiling(width), Math.Ceiling(height), limit);
     }
 
     // A rectangle within this of the text's own size counts as never resized (sizes are stored as floats and
@@ -131,7 +133,8 @@ public partial class TextAnnotation
     internal void SetEditedText(TextBox textBox)
     {
         Text = textBox.Text ?? string.Empty;
-        FitToText(free: double.IsNaN(textBox.Width));
+        double limit = textBox is TextAnnotationEditorBox editor ? editor.AnchorLimitWidth : double.PositiveInfinity;
+        FitToText(free: double.IsNaN(textBox.Width), limit);
     }
 
     /// <summary>
@@ -140,7 +143,7 @@ public partial class TextAnnotation
     /// font size picked after the text was finished. A resized rectangle is left as it is. Returns true when
     /// the rectangle changed.
     /// </summary>
-    internal bool ChangeStyle(Action change)
+    internal bool ChangeStyle(Action change, double canvasWidth = double.PositiveInfinity)
     {
         Size before = OutlinedTextControl.MeasureNaturalSize(this);
         bool natural = HasNaturalSize();
@@ -152,14 +155,14 @@ public partial class TextAnnotation
             return false;
         }
 
-        FitToText(free: true);
+        FitToText(free: true, canvasWidth);
         return true;
     }
 
     // Fits the rectangle to the text. Free: it becomes the text's own size, growing and shrinking from the point its
     // alignment keeps still (SetSizeAnchored). Not free (a rectangle that was resized): it keeps its width, where the
     // lines wrap, and is made taller downwards when they need it.
-    private void FitToText(bool free)
+    private void FitToText(bool free, double canvasWidth = double.PositiveInfinity)
     {
         SKRect bounds = GetBounds();
 
@@ -168,7 +171,7 @@ public partial class TextAnnotation
             Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
             if (naturalSize.Width > 0 && naturalSize.Height > 0) // no text left: the rectangle stays
             {
-                SetSizeAnchored(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height));
+                SetSizeAnchored(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height), canvasWidth);
             }
         }
         else
@@ -197,10 +200,67 @@ public partial class TextAnnotation
     /// corner for left-aligned text, the middle of the top edge for centred text, the top right corner for
     /// right-aligned text. So a centred text grows both ways from its middle and a right-aligned one leftwards.
     /// </summary>
-    internal void SetSizeAnchored(double width, double height)
+    internal void SetSizeAnchored(double width, double height, double canvasWidth = double.PositiveInfinity)
     {
         Point topLeft = GetAnchoredTopLeft(GetStoredBounds(), width, height, HorizontalAlignment, RotationAngle);
-        SetRect(topLeft.X, topLeft.Y, width, height);
+        double x = ClampAnchoredLeft(topLeft.X, width, height, HorizontalAlignment, RotationAngle, canvasWidth);
+        SetRect(x, topLeft.Y, width, height);
+    }
+
+    /// <summary>
+    /// Shifts a top-left horizontally so a centred or right-aligned box stays inside the image while it still fits.
+    /// Growing around the middle, or leftwards from the right edge, stops at an image edge and continues the other
+    /// way. Wider than the image: the box's horizontal span starts at the image's left and extends past the right.
+    /// Left-aligned text is not moved. A turned box is shifted by its axis-aligned horizontal span (it turns about
+    /// its middle), so the turned letters stay inside until that span is wider than the image.
+    /// </summary>
+    internal static double ClampAnchoredLeft(double left, double width, double height, TextHorizontalAlignment alignment, double angle, double canvasWidth)
+    {
+        if (alignment == TextHorizontalAlignment.Left || !(canvasWidth > 1) || double.IsInfinity(canvasWidth) || !(width > 0) || !(height > 0))
+        {
+            return left;
+        }
+
+        HorizontalSpan(left, width, height, angle, out double spanLeft, out double spanRight);
+        double span = spanRight - spanLeft;
+        if (!(span > 0))
+        {
+            return left;
+        }
+
+        double shift = span <= canvasWidth
+            ? spanLeft < 0 ? -spanLeft : spanRight > canvasWidth ? canvasWidth - spanRight : 0
+            : -spanLeft;
+        return left + shift;
+    }
+
+    // The horizontal span of the rectangle turned about its middle, in the same coordinates as its top left.
+    internal static void HorizontalSpan(double left, double width, double height, double angle, out double spanLeft, out double spanRight)
+    {
+        double normalized = angle % 360;
+        if (normalized < 0)
+        {
+            normalized += 360;
+        }
+
+        if (normalized < 0.001 || normalized > 359.999)
+        {
+            spanLeft = left;
+            spanRight = left + width;
+            return;
+        }
+
+        double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+        double centerX = left + (width / 2);
+        spanLeft = double.PositiveInfinity;
+        spanRight = double.NegativeInfinity;
+        foreach ((double x, double y) in new[] { (0d, 0d), (width, 0d), (width, height), (0d, height) })
+        {
+            double dx = x - (width / 2), dy = y - (height / 2);
+            double at = centerX + (dx * cos) - (dy * sin);
+            if (at < spanLeft) spanLeft = at;
+            if (at > spanRight) spanRight = at;
+        }
     }
 
     /// <summary>
