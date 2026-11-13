@@ -485,6 +485,13 @@ namespace ShareX.ImageEditor.Presentation.Views
             var selected = _selectionController.SelectedShape;
             if (selected == null) return;
 
+            if (selected.Tag is TextAnnotation textAnnotation)
+            {
+                // The outline is part of the room a text takes.
+                ChangeSelectedTextStyle(textAnnotation, selected, () => textAnnotation.StrokeWidth = width);
+                return;
+            }
+
             if (selected.Tag is Annotation annotation)
             {
                 annotation.StrokeWidth = width;
@@ -559,12 +566,7 @@ namespace ShareX.ImageEditor.Presentation.Views
             var selected = _selectionController.SelectedShape;
             if (selected?.Tag is TextAnnotation textAnn)
             {
-                textAnn.FontSize = fontSize;
-                if (selected is OutlinedTextControl outlinedText)
-                {
-                    outlinedText.InvalidateMeasure();
-                    outlinedText.InvalidateVisual();
-                }
+                ChangeSelectedTextStyle(textAnn, selected, () => textAnn.FontSize = fontSize);
             }
             else if (selected?.Tag is NumberAnnotation numAnn)
             {
@@ -669,13 +671,7 @@ namespace ShareX.ImageEditor.Presentation.Views
 
             if (selected?.Tag is TextAnnotation textAnnotation)
             {
-                textAnnotation.FontFamily = fontFamily;
-
-                if (selected is OutlinedTextControl outlinedText)
-                {
-                    outlinedText.InvalidateMeasure();
-                    outlinedText.InvalidateVisual();
-                }
+                ChangeSelectedTextStyle(textAnnotation, selected, () => textAnnotation.FontFamily = fontFamily);
             }
             else if (selected?.Tag is SpeechBalloonAnnotation balloonAnnotation)
             {
@@ -893,14 +889,11 @@ namespace ShareX.ImageEditor.Presentation.Views
             switch (selected?.Tag)
             {
                 case TextAnnotation textAnnotation:
-                    textAnnotation.IsBold = isBold ?? textAnnotation.IsBold;
-                    textAnnotation.IsItalic = isItalic ?? textAnnotation.IsItalic;
-
-                    if (selected is OutlinedTextControl outlinedText)
+                    ChangeSelectedTextStyle(textAnnotation, selected, () =>
                     {
-                        outlinedText.InvalidateMeasure();
-                        outlinedText.InvalidateVisual();
-                    }
+                        textAnnotation.IsBold = isBold ?? textAnnotation.IsBold;
+                        textAnnotation.IsItalic = isItalic ?? textAnnotation.IsItalic;
+                    });
 
                     UpdateActiveTextEditorFontStyle(textAnnotation, textAnnotation.IsBold, textAnnotation.IsItalic);
                     break;
@@ -924,6 +917,30 @@ namespace ShareX.ImageEditor.Presentation.Views
                         _selectionController.UpdateSelectionHandles();
                     }
                     break;
+            }
+        }
+
+        // A text's font, its size or weight, or its outline width. The box behind a text that was never resized
+        // follows the change (TextAnnotation.ChangeStyle); before, the text was cut off at the old rectangle.
+        private void ChangeSelectedTextStyle(TextAnnotation annotation, Control selected, Action change)
+        {
+            bool refitted = annotation.ChangeStyle(change);
+
+            if (selected is not OutlinedTextControl outlinedText)
+            {
+                return;
+            }
+
+            if (refitted)
+            {
+                annotation.UpdateVisual(outlinedText);
+                _selectionController.UpdateSelectionHandles();
+                ScheduleAutoExpandCanvas(annotation);
+            }
+            else
+            {
+                outlinedText.InvalidateMeasure();
+                outlinedText.InvalidateVisual();
             }
         }
 
