@@ -29,9 +29,10 @@ using System.Buffers.Binary;
 using System.IO;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
-using System.Threading.Tasks;
+using System.Threading;
 
 namespace ShareX.HelpersLib;
 
@@ -57,7 +58,7 @@ public static unsafe class FastPngWriter
 
     /// <summary>
     /// Writes one small picture to nowhere, so the writer is compiled before the first capture needs it.
-    /// Without it the first save after a start takes about ten times as long as the later ones.
+    /// Without it the first save after a start takes several times as long as the later ones.
     /// </summary>
     public static void WarmUp()
     {
@@ -92,11 +93,47 @@ public static unsafe class FastPngWriter
         }
         else
         {
-            Parallel.For(0, bandCount, new ParallelOptions { MaxDegreeOfParallelism = bandCount }, index =>
+            // The bands are handed out by a counter. This thread works on them too and waits only for bands a
+            // helper has already taken, so a busy thread pool makes a save slower but cannot hold it up: a helper
+            // that starts late finds nothing left. (Parallel.For waits for every helper it queued, and a capture
+            // is saved from a thread of its own, which cannot run a queued helper itself.)
+            int next = -1, pending = bandCount;
+            Exception failure = null;
+            ManualResetEventSlim done = new(false); // not disposed: a helper may still be inside Set when Wait returns
+
+            void Work()
             {
-                int first = (int)((long)height * index / bandCount), end = (int)((long)height * (index + 1) / bandCount);
-                results[index] = EncodeBand(pixels, rowBytes, width, first, end, blueFirst, filter, level, strategy, index == bandCount - 1);
-            });
+                int index;
+                while ((index = Interlocked.Increment(ref next)) < bandCount)
+                {
+                    try
+                    {
+                        int first = (int)((long)height * index / bandCount), end = (int)((long)height * (index + 1) / bandCount);
+                        results[index] = EncodeBand(pixels, rowBytes, width, first, end, blueFirst, filter, level, strategy, index == bandCount - 1);
+                    }
+                    catch (Exception e)
+                    {
+                        Interlocked.CompareExchange(ref failure, e, null);
+                    }
+
+                    if (Interlocked.Decrement(ref pending) == 0) done.Set();
+                }
+            }
+
+            Action work = Work;
+            for (int i = 1; i < bandCount; i++) ThreadPool.UnsafeQueueUserWorkItem(static state => state(), work, preferLocal: false);
+            Work();
+            done.Wait();
+
+            if (failure != null)
+            {
+                foreach (Band band in results)
+                {
+                    if (band.Data != null) ArrayPool<byte>.Shared.Return(band.Data);
+                }
+
+                ExceptionDispatchInfo.Throw(failure);
+            }
         }
 
         // signature 8, IHDR 25, zlib header 2 and checksum 4, IEND 12, and 12 around each band's IDAT
@@ -117,7 +154,8 @@ public static unsafe class FastPngWriter
         WriteChunk(output, "IHDR"u8, header, default);
 
         uint adler = 1;
-        Span<byte> zlibHeader = stackalloc byte[] { 0x78, 0x01 };
+        // The second byte names the level as zlib does: fastest, fast, default, best.
+        Span<byte> zlibHeader = stackalloc byte[] { 0x78, level < 2 ? (byte)0x01 : level < 6 ? (byte)0x5E : level == 6 ? (byte)0x9C : (byte)0xDA };
         Span<byte> trailer = stackalloc byte[4];
         for (int i = 0; i < bandCount; i++)
         {

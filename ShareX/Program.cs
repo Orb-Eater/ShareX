@@ -277,6 +277,11 @@ internal static class Program
         {
             _ = PrewarmRegionCaptureAsync();
         }
+        else
+        {
+            // The region capture warm-up also warms the PNG writer; without it that is done here.
+            _ = Task.Run(FastPngWriter.WarmUp);
+        }
     }
 
     private static async Task PrewarmRegionCaptureAsync()

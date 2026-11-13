@@ -520,12 +520,13 @@ public static partial class SkiaImageHelpers
     {
         filter = flags switch
         {
-            SKPngEncoderFilterFlags.NoFilters or SKPngEncoderFilterFlags.None => FastPngFilter.None,
+            SKPngEncoderFilterFlags.None => FastPngFilter.None,
             SKPngEncoderFilterFlags.Sub => FastPngFilter.Sub,
             SKPngEncoderFilterFlags.Up => FastPngFilter.Up,
             SKPngEncoderFilterFlags.Avg => FastPngFilter.Average,
             SKPngEncoderFilterFlags.Paeth => FastPngFilter.Paeth,
-            SKPngEncoderFilterFlags.AllFilters => FastPngFilter.Adaptive,
+            // With no filter flag set Skia's encoder chooses per row too.
+            SKPngEncoderFilterFlags.AllFilters or SKPngEncoderFilterFlags.NoFilters => FastPngFilter.Adaptive,
             _ => (FastPngFilter)(-1)
         };
         return filter >= 0;
@@ -533,8 +534,8 @@ public static partial class SkiaImageHelpers
 
     // The compression level setting is a zlib level for Skia's encoder. FastPngWriter packs with .NET's own
     // compressor (zlib-ng), whose level 1 is a quicker and weaker method (files about 23 % larger). One level up
-    // gives files from 9 % smaller to 1 % larger than Skia's at the same setting (measured on a screenshot at every
-    // level, see sharex-fork-work/pngbench). 0 stays "stored".
+    // gives files from 9 % smaller to 2 % larger than Skia's at the same setting (measured on two screenshots at
+    // every level, see sharex-fork-work/pngbench). 0 stays "stored".
     private static int ToFastPngLevel(int zlibLevel) => zlibLevel <= 0 ? 0 : Math.Min(9, zlibLevel + 1);
 
     // Returns false when the encoded PNG exceeds the limit, so callers can discard it without encoding the remaining rows.
@@ -545,9 +546,6 @@ public static partial class SkiaImageHelpers
 
     public static unsafe bool SavePNG(SKBitmap bitmap, Stream stream, PNGBitDepth depth, long sizeLimit, SKPngEncoderOptions options)
     {
-        using SizeLimitedWStream output = new(stream, sizeLimit);
-        bool encoded;
-
         bool opaqueOutput = depth == PNGBitDepth.Bit24 || depth == PNGBitDepth.Automatic &&
             (bitmap.AlphaType == SKAlphaType.Opaque || !IsImageTransparent(bitmap));
         // The file has no alpha channel and the bitmap's own memory can be read as it is. For a bitmap not marked
@@ -562,12 +560,16 @@ public static partial class SkiaImageHelpers
         if (directOpaque && TryGetFastFilter(options.FilterFlags, out FastPngFilter fastFilter))
         {
             // Every screen capture comes this way. Our own writer packs it on several cores: the same pixels
-            // in an ordinary PNG, in about a tenth of the time Skia's single-core encoder takes.
+            // in an ordinary PNG, in about a tenth of the time Skia's single-core encoder takes. A file over the
+            // size limit is not written at all (Skia's encoder stops part way through one).
             bool written = FastPngWriter.WriteOpaque(stream, direct, rowBytes, bitmap.Width, bitmap.Height,
                 bitmap.ColorType == SKColorType.Bgra8888, fastFilter, ToFastPngLevel(options.ZLibLevel), sizeLimit: sizeLimit);
             GC.KeepAlive(bitmap); // the rows were read through a bare pointer
             return written;
         }
+
+        using SizeLimitedWStream output = new(stream, sizeLimit);
+        bool encoded;
 
         if (directOpaque && bitmap.AlphaType != SKAlphaType.Opaque)
         {
