@@ -82,7 +82,7 @@ public partial class TextAnnotation
 
     /// <summary>
     /// True when the rectangle is still the size the text itself takes, as it is after typing a new text. False
-    /// once it has been dragged to another size, or the font was changed afterwards.
+    /// once it has been dragged to another size.
     /// </summary>
     internal bool HasNaturalSize()
     {
@@ -102,9 +102,11 @@ public partial class TextAnnotation
     {
         if (HasNaturalSize())
         {
+            // As the box a new text is typed in: no smallest width, and only typed line breaks.
             textBox.Width = double.NaN;
             textBox.Height = double.NaN;
-            textBox.TextWrapping = TextWrapping.NoWrap; // as the box a new text is typed in: only typed line breaks
+            textBox.MinWidth = 0;
+            textBox.TextWrapping = TextWrapping.NoWrap;
         }
         else
         {
@@ -122,31 +124,71 @@ public partial class TextAnnotation
     internal void SetEditedText(TextBox textBox)
     {
         Text = textBox.Text ?? string.Empty;
+        FitToText(free: double.IsNaN(textBox.Width));
+    }
 
-        SKRect bounds = GetBounds();
-        double width = bounds.Width;
-        double height = bounds.Height;
+    /// <summary>
+    /// Changes the font, its size or weight, or the outline width, all of which change the size the text takes.
+    /// A rectangle that had the text's own size before keeps having it, so the box behind a text follows a
+    /// font size picked after the text was finished. A resized rectangle is left as it is. Returns true when
+    /// the rectangle changed.
+    /// </summary>
+    internal bool ChangeStyle(Action change)
+    {
+        Size before = OutlinedTextControl.MeasureNaturalSize(this);
+        bool natural = HasNaturalSize();
+        change();
 
-        if (double.IsNaN(textBox.Width))
+        // Picking a text sets its own values again; that is no change and must not move anything.
+        if (!natural || OutlinedTextControl.MeasureNaturalSize(this) == before)
         {
-            // The free box: the rectangle becomes the text's own size.
-            Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
-            if (naturalSize.Width <= 0 || naturalSize.Height <= 0)
-            {
-                return; // no text left: the rectangle stays
-            }
+            return false;
+        }
 
-            width = Math.Ceiling(naturalSize.Width);
-            height = Math.Ceiling(naturalSize.Height);
+        FitToText(free: true);
+        return true;
+    }
+
+    // Fits the rectangle to the text from its top left corner. Free: it becomes the text's own size. Not free (a
+    // rectangle that was resized): it keeps its width, where the lines wrap, and is made taller when they need it.
+    private void FitToText(bool free)
+    {
+        SKRect bounds = GetBounds();
+
+        if (free)
+        {
+            Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
+            if (naturalSize.Width > 0 && naturalSize.Height > 0) // no text left: the rectangle stays
+            {
+                SetSize(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height));
+            }
         }
         else
         {
-            // The resized rectangle: as wide as it was, and tall enough for every line.
-            height = Math.Max(height, Math.Ceiling(OutlinedTextControl.MeasureHeightAtWidth(this, width)));
+            double needed = Math.Ceiling(OutlinedTextControl.MeasureHeightAtWidth(this, bounds.Width));
+            if (needed > bounds.Height)
+            {
+                SetSize(bounds.Width, needed);
+            }
         }
+    }
 
-        StartPoint = new SKPoint(bounds.Left, bounds.Top);
-        EndPoint = new SKPoint((float)(bounds.Left + width), (float)(bounds.Top + height));
+    /// <summary>
+    /// Gives the rectangle a size, from its top left corner. The corners are stored as floats, so the stored size
+    /// can come out a hair over the one asked for, and layout rounds any size up to whole pixels: the finished text
+    /// was then one pixel bigger than the box it was typed in. The far corner is stepped down until it is not over.
+    /// </summary>
+    internal void SetSize(double width, double height)
+    {
+        SKRect bounds = GetBounds();
+        float left = bounds.Left, top = bounds.Top;
+        float right = (float)(left + width), bottom = (float)(top + height);
+
+        while (right > left && (double)(right - left) > width) right = MathF.BitDecrement(right);
+        while (bottom > top && (double)(bottom - top) > height) bottom = MathF.BitDecrement(bottom);
+
+        StartPoint = new SKPoint(left, top);
+        EndPoint = new SKPoint(right, bottom);
     }
 
     private const double EditorBorderThickness = 1;

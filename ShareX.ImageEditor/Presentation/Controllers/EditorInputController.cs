@@ -1665,9 +1665,9 @@ public class EditorInputController
                             var desiredWidth = control.DesiredSize.Width > 0 ? control.DesiredSize.Width : tb.Bounds.Width;
                             var desiredHeight = control.DesiredSize.Height > 0 ? control.DesiredSize.Height : tb.Bounds.Height;
 
-                            annotation.EndPoint = new SKPoint(
-                                (float)(Canvas.GetLeft(control) + desiredWidth),
-                                (float)(Canvas.GetTop(control) + desiredHeight));
+                            // From the control's own corner (UpdateVisualControl put it at the annotation's), stored
+                            // so that the size is never a hair over: see TextAnnotation.SetSize.
+                            annotation.SetSize(desiredWidth, desiredHeight);
 
                             AnnotationVisualFactory.UpdateVisualControl(
                                 control,
