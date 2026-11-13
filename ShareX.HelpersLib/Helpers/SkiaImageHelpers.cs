@@ -564,7 +564,12 @@ public static partial class SkiaImageHelpers
             TryGetDirectPixels(bitmap, out direct, out rowBytes) &&
             (bitmap.AlphaType == SKAlphaType.Opaque || !IsImageTransparent(bitmap));
 
-        if ((directOpaque || directDefault) && TryGetFastFilter(options.FilterFlags, out FastPngFilter fastFilter))
+        // Skia will not read a PNG over 1,000,000 pixels wide or tall, nor write one (the save fails with an error).
+        // A picture that size keeps Skia's encoder: our writer would make a file ShareX cannot open again.
+        const int MaxSide = 1_000_000;
+
+        if ((directOpaque || directDefault) && bitmap.Width <= MaxSide && bitmap.Height <= MaxSide &&
+            TryGetFastFilter(options.FilterFlags, out FastPngFilter fastFilter))
         {
             // Every screen capture comes this way. Our own writer packs it on several cores: the same pixels
             // in an ordinary PNG of the same kind, in about a tenth of the time Skia's single-core encoder
