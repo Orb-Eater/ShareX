@@ -197,8 +197,12 @@ namespace ShareX.ImageEditor.Presentation.Views
             float width = _editorCore.CanvasSize.Width;
             float height = _editorCore.CanvasSize.Height;
 
-            int addRight = right > width ? (int)Math.Ceiling(right - width) + LiveExpandStep : 0;
-            int addBottom = bottom > height ? (int)Math.Ceiling(bottom - height) + (int)AutoExpandMargin : 0;
+            // The tolerance of the final fit (AutoExpandCanvasToFit). Without it a box that ends on the image edge,
+            // over it only by a rounding error (a click between two pixels is stored as a float), grew the canvas by
+            // a whole step here, and the final fit took that away again when the text was finished.
+            const double tolerance = Core.Editor.EditorCore.AutoExpandTolerance;
+            int addRight = right > width + tolerance ? (int)Math.Ceiling(right - width) + LiveExpandStep : 0;
+            int addBottom = bottom > height + tolerance ? (int)Math.Ceiling(bottom - height) + (int)AutoExpandMargin : 0;
 
             if (addRight == 0 && addBottom == 0)
             {
