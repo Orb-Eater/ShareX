@@ -71,9 +71,11 @@ public partial class TextAnnotation
         Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
         double width = naturalSize.Width > 0 ? naturalSize.Width : textBox.Bounds.Width;
         double height = naturalSize.Height > 0 ? naturalSize.Height : textBox.Bounds.Height;
-        EndPoint = new SKPoint(
-            (float)(Canvas.GetLeft(textBox) + width),
-            (float)(Canvas.GetTop(textBox) + height));
+
+        // Whole pixels, stored so that they are never a hair over (SetSize), as an edited text gets them: a raw size
+        // stored as floats could lay out one pixel off the box the text was typed in. The rectangle starts where
+        // the text box is, at the annotation's start point.
+        SetSize(Math.Ceiling(width), Math.Ceiling(height));
     }
 
     // A rectangle within this of the text's own size counts as never resized (sizes are stored as floats and
