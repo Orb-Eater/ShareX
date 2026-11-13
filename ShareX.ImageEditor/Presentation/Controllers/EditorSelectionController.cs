@@ -1181,7 +1181,7 @@ public partial class EditorSelectionController
             return false;
         }
 
-        var bounds = GetLogicalRect(shape);
+        var bounds = GetSelectionRect(shape);
         double left = bounds.Left;
         double top = bounds.Top;
         double width = bounds.Width;
