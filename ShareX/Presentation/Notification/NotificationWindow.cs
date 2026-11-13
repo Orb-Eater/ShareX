@@ -74,6 +74,8 @@ public partial class NotificationWindow : Window
     private bool _isFileDragActive;
     private Point _dragStart;
     private PointerPressedEventArgs? _dragEvent;
+    private long _timingStart;
+    private string? _timingSteps;
 
     public NotificationWindowConfig? Config => _config;
 
@@ -119,6 +121,8 @@ public partial class NotificationWindow : Window
             return;
         }
 
+        long asked = Stopwatch.GetTimestamp();
+
         // A text-only notification (a failed task, for one) has no file, and loading a null path logged an exception.
         if (config.Image == null && !string.IsNullOrEmpty(config.FilePath))
         {
@@ -133,22 +137,37 @@ public partial class NotificationWindow : Window
 
         Dispatcher.UIThread.Post(() =>
         {
-            if (_instance == null)
+            double queued = MillisecondsSince(asked);
+            bool isNew = _instance == null;
+            _instance ??= new NotificationWindow();
+            double made = MillisecondsSince(asked);
+            _instance.LoadConfig(config);
+            double loaded = MillisecondsSince(asked);
+
+            if (!_instance.IsVisible)
             {
-                _instance = new NotificationWindow();
-                _instance.LoadConfig(config);
                 _instance.Show();
             }
-            else
-            {
-                _instance.LoadConfig(config);
 
-                if (!_instance.IsVisible)
-                {
-                    _instance.Show();
-                }
-            }
+            _instance._timingStart = asked;
+            _instance._timingSteps = $"wait {queued:F0}, {(isNew ? "new window" : "same window")} {made - queued:F0}, " +
+                $"content {loaded - made:F0}, show {MillisecondsSince(asked) - loaded:F0}";
         });
+    }
+
+    private static double MillisecondsSince(long timestamp) => Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds;
+
+    // One log line per notification: how long after the request it was in place, and what each step took.
+    private void LogTiming()
+    {
+        if (_timingSteps == null)
+        {
+            return;
+        }
+
+        string steps = _timingSteps;
+        _timingSteps = null;
+        DebugHelper.WriteLine($"Notification: in place {MillisecondsSince(_timingStart):F0} ms after it was asked for ({steps}).");
     }
 
     public static async Task CloseActiveWindowAsync()
@@ -351,6 +370,7 @@ public partial class NotificationWindow : Window
         int x = GetHorizontalPosition(_config.Placement, area, size.Width, offset);
         int y = GetVerticalPosition(_config.Placement, area, size.Height, offset);
         Position = new PixelPoint(x, y);
+        LogTiming();
     }
 
     private static int GetHorizontalPosition(DrawingContentAlignment placement, PixelRect area, int width, int offset) => placement switch

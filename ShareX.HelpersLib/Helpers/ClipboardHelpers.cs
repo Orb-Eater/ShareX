@@ -66,6 +66,10 @@ namespace ShareX.HelpersLib
 
         public static uint SequenceNumber => OperatingSystem.IsWindows() ? WindowsClipboard.SequenceNumber : 0;
 
+        // The clipboard PNG only lives in memory until it is pasted, so it is packed at the quickest level:
+        // the time before the copy is ready matters more than its size.
+        private static readonly SkiaSharp.SKPngEncoderOptions ClipboardPngOptions = new(SkiaSharp.SKPngEncoderFilterFlags.Sub, 1);
+
         // stillWanted, if given, is asked just before the write; false leaves the clipboard as it is. A copy that is
         // prepared off the UI thread uses it so that it does not overwrite a newer copy.
         public static bool CopyImage(Image img, string fileName = null, Func<bool> stillWanted = null)
@@ -76,7 +80,7 @@ namespace ShareX.HelpersLib
             {
                 size = $"{img.Width}x{img.Height}";
                 using MemoryStream png = new();
-                img.Save(png, ImageFormat.Png);
+                SkiaImageHelpers.SavePNG(img, png, PNGBitDepth.Automatic, long.MaxValue, ClipboardPngOptions);
                 byte[] pngBytes = png.ToArray();
                 byte[] dib = OperatingSystem.IsWindows() ? CreateDib(img) : null;
                 string html = CreateImageHtml(fileName);
@@ -106,7 +110,12 @@ namespace ShareX.HelpersLib
         {
             if (HelpersOptions.UseAlternativeClipboardCopyImage && !HelpersOptions.DefaultCopyImageFillBackground)
                 return ClipboardHelpersEx.ConvertToDib(img);
+            // A capture has no transparent pixel, so there is nothing to fill and its rows can be copied as they are.
+            byte[] dib = SkiaImageHelpers.TryCreateOpaqueDib(img);
+            if (dib != null) return dib;
             using Bitmap opaque = SkiaImageHelpers.FillBackground(img, Color.White);
+            dib = SkiaImageHelpers.TryCreateOpaqueDib(opaque);
+            if (dib != null) return dib;
             using MemoryStream bmp = new();
             opaque.Save(bmp, ImageFormat.Bmp);
             return bmp.ToArray()[14..];

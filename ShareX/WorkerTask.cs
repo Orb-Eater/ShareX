@@ -1139,7 +1139,13 @@ namespace ShareX
             {
                 Bitmap image = null;
 
-                if (Image != null)
+                // The copy is for the task list's thumbnail. A capture that is already saved gets its thumbnail from
+                // the file (the task list reads it on this same event), so the full copy here and the second one the
+                // window makes on the UI thread would only hold up the end of the task and its notification.
+                bool thumbnailFromFile = !string.IsNullOrEmpty(Info.FilePath) && FileHelpers.IsImageFile(Info.FilePath) &&
+                    File.Exists(Info.FilePath) && !Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.DeleteFile);
+
+                if (Image != null && !thumbnailFromFile)
                 {
                     image = (Bitmap)Image.Copy();
                 }

@@ -27,6 +27,7 @@ using SkiaSharp;
 using System;
 using System.Drawing;
 using System.IO;
+using System.Numerics;
 
 namespace ShareX.HelpersLib;
 
@@ -147,10 +148,99 @@ public static partial class SkiaImageHelpers
         return SkiaPixelBuffer.Compare(firstPixels, secondPixels);
     }
 
-    public static bool IsImageTransparent(SKBitmap bitmap)
+    public static unsafe bool IsImageTransparent(SKBitmap bitmap)
     {
+        if (TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes))
+        {
+            // Skia reads every pixel of an opaque bitmap as alpha 255, whatever its fourth byte holds.
+            if (bitmap.AlphaType == SKAlphaType.Opaque) return false;
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                if (HasTransparentPixel(new ReadOnlySpan<uint>(direct + (long)y * rowBytes, bitmap.Width))) return true;
+            }
+            return false;
+        }
+
         using SkiaPixelBuffer pixels = new(bitmap, true, PixelAccess.ReadOnly);
         return pixels.IsTransparent();
+    }
+
+    // True when the bitmap's own memory holds 8-bit BGRA or RGBA pixels (alpha in the fourth byte), so it can be
+    // read where it is. SkiaPixelBuffer makes a converted copy of the whole image instead, which costs about as
+    // much as encoding it.
+    private static unsafe bool TryGetDirectPixels(SKBitmap bitmap, out byte* pixels, out int rowBytes)
+    {
+        pixels = null;
+        rowBytes = 0;
+        if (bitmap.ColorType is not (SKColorType.Bgra8888 or SKColorType.Rgba8888) || bitmap.Width <= 0 || bitmap.Height <= 0)
+            return false;
+        IntPtr address = bitmap.GetPixels();
+        if (address == IntPtr.Zero || bitmap.RowBytes < (long)bitmap.Width * 4) return false;
+        pixels = (byte*)address;
+        rowBytes = bitmap.RowBytes;
+        return true;
+    }
+
+    private static bool HasTransparentPixel(ReadOnlySpan<uint> row)
+    {
+        const uint alphaMask = 0xFF000000;
+        int index = 0;
+        if (Vector.IsHardwareAccelerated && row.Length >= Vector<uint>.Count)
+        {
+            Vector<uint> mask = new(alphaMask);
+            for (int last = row.Length - Vector<uint>.Count; index <= last; index += Vector<uint>.Count)
+            {
+                if (Vector.BitwiseAnd(new Vector<uint>(row.Slice(index)), mask) != mask) return true;
+            }
+        }
+        for (; index < row.Length; index++)
+        {
+            if ((row[index] & alphaMask) != alphaMask) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The image as a 24 bpp bottom-up BMP without its 14-byte file header (a CF_DIB block), byte for byte what
+    /// SaveBMP writes after that header. Null when a pixel is not fully opaque or the pixels cannot be read in place.
+    /// </summary>
+    public static unsafe byte[] TryCreateOpaqueDib(SKBitmap bitmap)
+    {
+        if (bitmap == null || !TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes) || IsImageTransparent(bitmap))
+            return null;
+
+        const int headerSize = 40;
+        int width = bitmap.Width, height = bitmap.Height;
+        int stride = checked((checked(width * 3) + 3) / 4 * 4);
+        int pixelSize = checked(stride * height);
+        byte[] dib = new byte[checked(headerSize + pixelSize)];
+        BitConverter.TryWriteBytes(dib.AsSpan(0), headerSize);
+        BitConverter.TryWriteBytes(dib.AsSpan(4), width);
+        BitConverter.TryWriteBytes(dib.AsSpan(8), height);
+        BitConverter.TryWriteBytes(dib.AsSpan(12), (ushort)1);
+        BitConverter.TryWriteBytes(dib.AsSpan(14), (ushort)24);
+        BitConverter.TryWriteBytes(dib.AsSpan(20), pixelSize);
+        BitConverter.TryWriteBytes(dib.AsSpan(24), 3780);
+        BitConverter.TryWriteBytes(dib.AsSpan(28), 3780);
+
+        // Every alpha byte is 255, so the stored colours are already the straight ones.
+        int blue = bitmap.ColorType == SKColorType.Bgra8888 ? 0 : 2, red = 2 - blue;
+        fixed (byte* output = dib)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                byte* source = direct + (long)(height - 1 - y) * rowBytes;
+                byte* target = output + headerSize + (long)y * stride;
+                for (int x = 0; x < width; x++, source += 4, target += 3)
+                {
+                    target[0] = source[blue];
+                    target[1] = source[1];
+                    target[2] = source[red];
+                }
+            }
+        }
+
+        return dib;
     }
 
     public static MemoryStream SaveJPEG(SKBitmap bitmap, int quality,
@@ -426,14 +516,23 @@ public static partial class SkiaImageHelpers
         return SavePNG(bitmap, stream, depth, sizeLimit, SKPngEncoderOptions.Default);
     }
 
-    public static bool SavePNG(SKBitmap bitmap, Stream stream, PNGBitDepth depth, long sizeLimit, SKPngEncoderOptions options)
+    public static unsafe bool SavePNG(SKBitmap bitmap, Stream stream, PNGBitDepth depth, long sizeLimit, SKPngEncoderOptions options)
     {
         using SizeLimitedWStream output = new(stream, sizeLimit);
         bool encoded;
 
         bool opaqueOutput = depth == PNGBitDepth.Bit24 || depth == PNGBitDepth.Automatic &&
             (bitmap.AlphaType == SKAlphaType.Opaque || !IsImageTransparent(bitmap));
-        if (opaqueOutput && (bitmap.AlphaType != SKAlphaType.Opaque ||
+        if (opaqueOutput && bitmap.AlphaType != SKAlphaType.Opaque && TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes) &&
+            (depth == PNGBitDepth.Automatic || !IsImageTransparent(bitmap)))
+        {
+            // Every alpha byte is 255 (Automatic checked that above), so the same memory read as opaque holds
+            // exactly the pixels the copy below would make. A screen capture always comes this way.
+            using SKPixmap pixels = new(new SKImageInfo(bitmap.Width, bitmap.Height, bitmap.ColorType, SKAlphaType.Opaque),
+                (IntPtr)direct, rowBytes);
+            encoded = pixels.Encode(output, options);
+        }
+        else if (opaqueOutput && (bitmap.AlphaType != SKAlphaType.Opaque ||
             bitmap.ColorType is not (SKColorType.Bgra8888 or SKColorType.Rgba8888)))
         {
             using SKBitmap opaque = new(new SKImageInfo(bitmap.Width, bitmap.Height, SKColorType.Bgra8888, SKAlphaType.Opaque));
