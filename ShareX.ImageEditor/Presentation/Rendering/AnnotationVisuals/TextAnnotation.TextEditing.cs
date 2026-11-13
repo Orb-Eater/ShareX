@@ -76,6 +76,79 @@ public partial class TextAnnotation
             (float)(Canvas.GetTop(textBox) + height));
     }
 
+    // A rectangle within this of the text's own size counts as never resized (sizes are stored as floats and
+    // rounded up to whole pixels).
+    private const double NaturalSizeTolerance = 1.5;
+
+    /// <summary>
+    /// True when the rectangle is still the size the text itself takes, as it is after typing a new text. False
+    /// once it has been dragged to another size, or the font was changed afterwards.
+    /// </summary>
+    internal bool HasNaturalSize()
+    {
+        Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
+        SKRect bounds = GetBounds();
+        return naturalSize.Width > 0 &&
+            Math.Abs(bounds.Width - naturalSize.Width) <= NaturalSizeTolerance &&
+            Math.Abs(bounds.Height - naturalSize.Height) <= NaturalSizeTolerance;
+    }
+
+    /// <summary>
+    /// Sizes the box a finished text is edited in again (CreateTextEditor), so it follows the text while it is
+    /// typed. A text that still has its own size gets a free box, as a new text has: it grows and shrinks with the
+    /// lines. A rectangle that was resized keeps its width, where the lines wrap, and grows downwards only.
+    /// </summary>
+    internal void SizeTextEditor(TextBox textBox)
+    {
+        if (HasNaturalSize())
+        {
+            textBox.Width = double.NaN;
+            textBox.Height = double.NaN;
+            textBox.TextWrapping = TextWrapping.NoWrap; // as the box a new text is typed in: only typed line breaks
+        }
+        else
+        {
+            SKRect bounds = GetBounds();
+            textBox.Width = Math.Max(20, bounds.Width);
+            textBox.Height = double.NaN;
+            textBox.MinHeight = Math.Max(20, bounds.Height);
+        }
+    }
+
+    /// <summary>
+    /// Takes the text from the box it was edited in (see SizeTextEditor) and fits the rectangle to it, from its
+    /// top left corner. Before, the rectangle stayed as it was and lines added to the text were cut off.
+    /// </summary>
+    internal void SetEditedText(TextBox textBox)
+    {
+        Text = textBox.Text ?? string.Empty;
+
+        SKRect bounds = GetBounds();
+        double width = bounds.Width;
+        double height = bounds.Height;
+
+        if (double.IsNaN(textBox.Width))
+        {
+            // The free box: the rectangle becomes the text's own size.
+            Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
+            if (naturalSize.Width <= 0 || naturalSize.Height <= 0)
+            {
+                return; // no text left: the rectangle stays
+            }
+
+            width = Math.Ceiling(naturalSize.Width);
+            height = Math.Ceiling(naturalSize.Height);
+        }
+        else
+        {
+            // The resized rectangle: as wide as it was, and tall enough for every line.
+            height = Math.Max(height, Math.Ceiling(OutlinedTextControl.MeasureHeightAtWidth(this, width)));
+        }
+
+        StartPoint = new SKPoint(bounds.Left, bounds.Top);
+        EndPoint = new SKPoint((float)(bounds.Left + width), (float)(bounds.Top + height));
+    }
+
     private const double EditorBorderThickness = 1;
 
     // Thin and neutral: it only marks the box as being typed in, and goes when the text is finished.

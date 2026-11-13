@@ -165,8 +165,8 @@ public partial class EditorSelectionController
         var annotationBounds = annotation.GetBounds();
         Canvas.SetLeft(textBox, ToOverlayCoordinate(annotationBounds.Left));
         Canvas.SetTop(textBox, ToOverlayCoordinate(annotationBounds.Top));
-        textBox.Width = Math.Max(20, annotationBounds.Width);
-        textBox.Height = Math.Max(20, annotationBounds.Height);
+        // The box follows the text while it is typed, and the rectangle is fitted to it afterwards.
+        annotation.SizeTextEditor(textBox);
 
         EventHandler<FocusChangedEventArgs>? lostFocusHandler = null;
 
@@ -174,15 +174,15 @@ public partial class EditorSelectionController
         {
             if (lostFocusHandler != null) textBox.LostFocus -= lostFocusHandler;
 
-            annotation.Text = textBox.Text ?? string.Empty;
+            // The text, and a rectangle that holds all of it: a resized one keeps its width (the lines wrap
+            // inside it) and grows downwards, one that was never resized takes the text's own size.
+            annotation.SetEditedText(textBox);
 
             // Remove from overlay
             overlay.Children.Remove(textBox);
 
-            // Keep the existing annotation rectangle so wrapped text stays inside the resized bounds.
             textControl.IsVisible = true;
-            textControl.InvalidateMeasure();
-            textControl.InvalidateVisual();
+            annotation.UpdateVisual(textControl);
 
             // Fire RequestUpdateEffect to save new state if needed
             RequestUpdateEffect?.Invoke(textControl);
