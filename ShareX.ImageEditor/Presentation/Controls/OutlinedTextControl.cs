@@ -55,10 +55,8 @@ namespace ShareX.ImageEditor.Presentation.Controls
             AffectsMeasure<OutlinedTextControl>(AnnotationProperty);
         }
 
-        public OutlinedTextControl()
-        {
-            ClipToBounds = true;
-        }
+        // No ClipToBounds: the control's drop shadow has to reach outside the box. DrawText clips the letters
+        // to the annotation instead, which is all the clip was for.
 
         internal static Size MeasureNaturalSize(TextAnnotation annotation)
         {
@@ -82,7 +80,9 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
             double strokePadding = annotation.StrokeWidth;
             double padding = TextPadding * 2;
-            double width = formattedText.Width + padding + (strokePadding * 2);
+            // Spaces typed at the end count, as they do in the box the text was typed in: without them the
+            // finished text was narrower than that box and the letters moved when it was finished.
+            double width = formattedText.WidthIncludingTrailingWhitespace + padding + (strokePadding * 2);
             double height = formattedText.Height + padding + (strokePadding * 2);
 
             if (double.IsNaN(width) || width < 0) width = 0;
@@ -97,24 +97,42 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
             if (Annotation == null || string.IsNullOrEmpty(Annotation.Text)) return;
 
-            DrawBox(context);
+            DrawBox(context, Annotation, Bounds.Size);
+            DrawText(context, Annotation, Annotation.Text, Bounds.Size);
+        }
+
+        // The box behind the text: the annotation's fill colour over the whole annotation, with rounded corners.
+        // A transparent fill draws nothing, which is how text looked before the box existed.
+        internal static void DrawBox(DrawingContext context, TextAnnotation annotation, Size size)
+        {
+            if (!annotation.HasBox || !Color.TryParse(annotation.FillColor, out Color fill)) return;
+
+            double radius = Math.Clamp(annotation.CornerRadius, 0, Math.Min(size.Width, size.Height) / 2);
+            context.DrawRectangle(new SolidColorBrush(fill), null, new Rect(size), radius, radius);
+        }
+
+        // The letters with their outline, laid out in an annotation of the given size. The box a text is typed in
+        // draws its text with this too (TextAnnotationEditorBox), so it shows what the finished text will be.
+        internal static void DrawText(DrawingContext context, TextAnnotation annotation, string? text, Size size)
+        {
+            if (string.IsNullOrEmpty(text)) return;
 
             var typeface = new Typeface(
-                Annotation.FontFamily,
-                Annotation.IsItalic ? FontStyle.Italic : FontStyle.Normal,
-                Annotation.IsBold ? FontWeight.Bold : FontWeight.Normal);
+                annotation.FontFamily,
+                annotation.IsItalic ? FontStyle.Italic : FontStyle.Normal,
+                annotation.IsBold ? FontWeight.Bold : FontWeight.Normal);
 
-            double strokePadding = Annotation.StrokeWidth;
+            double strokePadding = annotation.StrokeWidth;
             double horizontalPadding = TextPadding + strokePadding;
             double verticalPadding = TextPadding + strokePadding;
-            double maxTextWidth = Math.Max(0, Bounds.Width - (horizontalPadding * 2));
+            double maxTextWidth = Math.Max(0, size.Width - (horizontalPadding * 2));
 
             var formattedText = new FormattedText(
-                Annotation.Text,
+                text,
                 CultureInfo.CurrentUICulture,
                 FlowDirection.LeftToRight,
                 typeface,
-                Annotation.FontSize,
+                annotation.FontSize,
                 Brushes.Black); // Avalonia requires a brush to properly construct text extents in some backends
 
             if (maxTextWidth > 0)
@@ -122,26 +140,22 @@ namespace ShareX.ImageEditor.Presentation.Controls
                 formattedText.MaxTextWidth = maxTextWidth;
             }
 
-            formattedText.TextAlignment = TextHorizontalAlignmentHelper.ToAvaloniaTextAlignment(Annotation.HorizontalAlignment);
+            formattedText.TextAlignment = TextHorizontalAlignmentHelper.ToAvaloniaTextAlignment(annotation.HorizontalAlignment);
 
-            double textWidth = formattedText.Width;
             double textHeight = formattedText.Height;
             double originX = horizontalPadding;
-            double originY = Math.Max(verticalPadding, (Bounds.Height - textHeight) / 2.0);
+            double originY = Math.Max(verticalPadding, (size.Height - textHeight) / 2.0);
 
-            originY = Math.Min(originY, Math.Max(verticalPadding, Bounds.Height - textHeight - verticalPadding));
+            originY = Math.Min(originY, Math.Max(verticalPadding, size.Height - textHeight - verticalPadding));
 
             var textGeometry = formattedText.BuildGeometry(new Point(originX, originY));
             if (textGeometry == null) return;
 
-            // Setup brushes based on the annotation's color properties.
-            // Text color is now TextColor, Outline color is StrokeColor.
-
-            // Standard behavior in many editors is that transparent fill means no fill.
+            // Text color is TextColor, outline color is StrokeColor. A transparent one is not drawn.
             IBrush? fillBrush = null;
-            if (!string.IsNullOrEmpty(Annotation.TextColor))
+            if (!string.IsNullOrEmpty(annotation.TextColor))
             {
-                var textColor = Color.Parse(Annotation.TextColor);
+                var textColor = Color.Parse(annotation.TextColor);
                 if (textColor.A > 0)
                 {
                     fillBrush = new SolidColorBrush(textColor);
@@ -149,36 +163,25 @@ namespace ShareX.ImageEditor.Presentation.Controls
             }
 
             IPen? strokePen = null;
-            if (Annotation.StrokeWidth > 0 && !string.IsNullOrEmpty(Annotation.StrokeColor))
+            if (annotation.HasVisibleOutline)
             {
-                var strokeColor = Color.Parse(Annotation.StrokeColor);
-                if (strokeColor.A > 0)
+                strokePen = new Pen(new SolidColorBrush(Color.Parse(annotation.StrokeColor)), annotation.StrokeWidth, lineJoin: PenLineJoin.Round);
+            }
+
+            // Letters that do not fit a shrunk annotation are cut at its edge.
+            using (context.PushClip(new Rect(size)))
+            {
+                // The outline first, so the letters are drawn on top of it.
+                if (strokePen != null)
                 {
-                    strokePen = new Pen(new SolidColorBrush(strokeColor), Annotation.StrokeWidth, lineJoin: PenLineJoin.Round);
+                    context.DrawGeometry(null, strokePen, textGeometry);
+                }
+
+                if (fillBrush != null)
+                {
+                    context.DrawGeometry(fillBrush, null, textGeometry);
                 }
             }
-
-            // Draw main text (Stroke then Fill, so fill is on top of stroke)
-            // To get the stroke BEHIND the fill (standard typography outline), we must draw the stroke geometry first, then fill geometry.
-            if (strokePen != null)
-            {
-                context.DrawGeometry(null, strokePen, textGeometry);
-            }
-
-            if (fillBrush != null)
-            {
-                context.DrawGeometry(fillBrush, null, textGeometry);
-            }
-        }
-
-        // The box behind the text: the annotation's fill colour over the whole annotation, with rounded corners.
-        // A transparent fill draws nothing, which is how text looked before the box existed.
-        private void DrawBox(DrawingContext context)
-        {
-            if (Annotation == null || !Color.TryParse(Annotation.FillColor, out Color fill) || fill.A == 0) return;
-
-            double radius = Math.Clamp(Annotation.CornerRadius, 0, Math.Min(Bounds.Width, Bounds.Height) / 2);
-            context.DrawRectangle(new SolidColorBrush(fill), null, new Rect(Bounds.Size), radius, radius);
         }
 
         protected override Size MeasureOverride(Size availableSize)
