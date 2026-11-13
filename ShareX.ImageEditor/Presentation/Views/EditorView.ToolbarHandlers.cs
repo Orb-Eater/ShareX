@@ -932,7 +932,7 @@ namespace ShareX.ImageEditor.Presentation.Views
         // follows the change (TextAnnotation.ChangeStyle); before, the text was cut off at the old rectangle.
         private void ChangeSelectedTextStyle(TextAnnotation annotation, Control selected, Action change)
         {
-            bool refitted = annotation.ChangeStyle(change);
+            bool refitted = annotation.ChangeStyle(change, _editorCore.CanvasSize.Width);
 
             if (selected is not OutlinedTextControl outlinedText)
             {
