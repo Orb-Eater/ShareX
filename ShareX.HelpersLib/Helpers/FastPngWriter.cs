@@ -36,7 +36,8 @@ using System.Threading;
 
 namespace ShareX.HelpersLib;
 
-// FastPngWriter: a PNG writer for opaque 8-bit screenshots that uses several cores.
+// FastPngWriter: a PNG writer for opaque 8-bit screenshots that uses several cores. It writes RGB files, or RGBA
+// files whose alpha is 255 everywhere (what ShareX's default bit depth setting gives for a capture).
 //
 // A PNG's pixel data is one zlib stream: every row gets a filter byte, then everything is deflated. The usual
 // writers do that on one core. Here the picture is cut into horizontal bands; each band filters its rows and
@@ -50,7 +51,6 @@ public enum FastPngFilter { None = 0, Sub = 1, Up = 2, Average = 3, Paeth = 4, A
 
 public static unsafe class FastPngWriter
 {
-    private const int Bpp = 3;                 // bytes per pixel in the file: RGB
     private const int Slack = 64;              // room behind a row buffer so 32-byte loads may run past its end
     private const int MinBandBytes = 192 * 1024;
     private static readonly byte[] Signature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
@@ -71,16 +71,19 @@ public static unsafe class FastPngWriter
     }
 
     /// <summary>
-    /// Writes 4-byte pixels (blue or red first, the fourth byte is ignored) as an RGB PNG.
+    /// Writes 4-byte pixels (blue or red first) as an RGB PNG, where the fourth byte is ignored, or with
+    /// alphaChannel as an RGBA PNG, where it is written as it is: the caller makes sure the picture has no
+    /// see-through pixel, since premultiplied colours would be wrong in the file.
     /// level is the zlib level 0-9 of .NET's own compressor. bands 0 = one per core, as far as the picture is big
     /// enough. Returns false, writing nothing, when the file would be larger than sizeLimit.
     /// </summary>
     public static bool WriteOpaque(Stream output, byte* pixels, int rowBytes, int width, int height, bool blueFirst,
-        FastPngFilter filter, int level, int bands = 0, long sizeLimit = long.MaxValue)
+        FastPngFilter filter, int level, int bands = 0, long sizeLimit = long.MaxValue, bool alphaChannel = false)
     {
         const ZLibCompressionStrategy strategy = ZLibCompressionStrategy.Default;
         if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-        int stride = checked(width * Bpp);
+        int bpp = alphaChannel ? 4 : 3; // bytes per pixel in the file
+        int stride = checked(width * bpp);
         long rawSize = (long)(stride + 1) * height;
         int wanted = bands > 0 ? bands : Environment.ProcessorCount;
         int bandCount = (int)Math.Clamp(rawSize / MinBandBytes, 1, Math.Min(wanted, height));
@@ -89,7 +92,7 @@ public static unsafe class FastPngWriter
         Band[] results = new Band[bandCount];
         if (bandCount == 1)
         {
-            results[0] = EncodeBand(pixels, rowBytes, width, 0, height, blueFirst, filter, level, strategy, true);
+            results[0] = EncodeBand(pixels, rowBytes, width, bpp, 0, height, blueFirst, filter, level, strategy, true);
         }
         else
         {
@@ -109,7 +112,7 @@ public static unsafe class FastPngWriter
                     try
                     {
                         int first = (int)((long)height * index / bandCount), end = (int)((long)height * (index + 1) / bandCount);
-                        results[index] = EncodeBand(pixels, rowBytes, width, first, end, blueFirst, filter, level, strategy, index == bandCount - 1);
+                        results[index] = EncodeBand(pixels, rowBytes, width, bpp, first, end, blueFirst, filter, level, strategy, index == bandCount - 1);
                     }
                     catch (Exception e)
                     {
@@ -156,7 +159,7 @@ public static unsafe class FastPngWriter
         BinaryPrimitives.WriteInt32BigEndian(header, width);
         BinaryPrimitives.WriteInt32BigEndian(header.Slice(4), height);
         header[8] = 8;   // bits per channel
-        header[9] = 2;   // colour type: RGB
+        header[9] = alphaChannel ? (byte)6 : (byte)2; // colour type: RGBA or RGB
         WriteChunk(output, "IHDR"u8, header, default);
 
         uint adler = 1;
@@ -187,13 +190,13 @@ public static unsafe class FastPngWriter
 
     // Compiled fully optimised at the first call: a capture is rare, so the code would otherwise run unoptimised.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static Band EncodeBand(byte* pixels, int rowBytes, int width, int firstRow, int endRow, bool blueFirst,
+    private static Band EncodeBand(byte* pixels, int rowBytes, int width, int bpp, int firstRow, int endRow, bool blueFirst,
         FastPngFilter filter, int level, ZLibCompressionStrategy strategy, bool last)
     {
-        int stride = width * Bpp;
+        int stride = width * bpp;
         int line = stride + 1;
-        // Rows carry Bpp zero bytes in front, so "the pixel to the left" of the first pixel reads as zero.
-        byte[] rowsBuffer = ArrayPool<byte>.Shared.Rent(2 * (Bpp + stride + Slack));
+        // Rows carry bpp zero bytes in front, so "the pixel to the left" of the first pixel reads as zero.
+        byte[] rowsBuffer = ArrayPool<byte>.Shared.Rent(2 * (bpp + stride + Slack));
         byte[] workBuffer = ArrayPool<byte>.Shared.Rent(5 * (stride + Slack));
         const int chunkRows = 32;
         byte[] chunk = ArrayPool<byte>.Shared.Rent(chunkRows * line);
@@ -204,10 +207,10 @@ public static unsafe class FastPngWriter
 
         fixed (byte* rows = rowsBuffer, work = workBuffer, chunkStart = chunk)
         {
-            int rowSize = Bpp + stride + Slack;
-            byte* current = rows + Bpp, previous = rows + rowSize + Bpp;
+            int rowSize = bpp + stride + Slack;
+            byte* current = rows + bpp, previous = rows + rowSize + bpp;
             new Span<byte>(rows, 2 * rowSize).Clear();
-            if (firstRow > 0) ToRgb(pixels + (long)(firstRow - 1) * rowBytes, previous, width, blueFirst);
+            if (firstRow > 0) ToFileOrder(pixels + (long)(firstRow - 1) * rowBytes, previous, width, blueFirst, bpp);
 
             DeflateStream deflate = new(compressed, new ZLibCompressionOptions { CompressionLevel = level, CompressionStrategy = strategy }, leaveOpen: true);
             try
@@ -215,9 +218,9 @@ public static unsafe class FastPngWriter
                 int inChunk = 0;
                 for (int y = firstRow; y < endRow; y++)
                 {
-                    ToRgb(pixels + (long)y * rowBytes, current, width, blueFirst);
+                    ToFileOrder(pixels + (long)y * rowBytes, current, width, blueFirst, bpp);
                     byte* target = chunkStart + (long)inChunk * line;
-                    target[0] = (byte)FilterRow(current, previous, stride, filter, work, target + 1);
+                    target[0] = (byte)FilterRow(current, previous, stride, bpp, filter, work, target + 1);
                     if (++inChunk == chunkRows || y == endRow - 1)
                     {
                         ReadOnlySpan<byte> filtered = new(chunkStart, inChunk * line);
@@ -255,9 +258,36 @@ public static unsafe class FastPngWriter
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static void ToRgb(byte* source, byte* target, int width, bool blueFirst)
+    private static void ToFileOrder(byte* source, byte* target, int width, bool blueFirst, int bpp)
     {
         int x = 0;
+        if (bpp == 4)
+        {
+            // All four bytes are kept; only blue and red change places when blue comes first.
+            if (!blueFirst)
+            {
+                Buffer.MemoryCopy(source, target, (long)width * 4, (long)width * 4);
+                return;
+            }
+
+            if (Ssse3.IsSupported)
+            {
+                Vector128<byte> swap = Vector128.Create((byte)2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+                for (; x <= width - 4; x += 4)
+                {
+                    Ssse3.Shuffle(Sse2.LoadVector128(source + (x * 4)), swap).Store(target + (x * 4));
+                }
+            }
+
+            for (; x < width; x++)
+            {
+                byte* s = source + (x * 4), t = target + (x * 4);
+                t[0] = s[2]; t[1] = s[1]; t[2] = s[0]; t[3] = s[3];
+            }
+
+            return;
+        }
+
         if (Ssse3.IsSupported && width >= 6)
         {
             // 4 pixels in, 12 bytes out; the 16-byte store spills 4 bytes into the next pixels, rewritten right after.
@@ -280,11 +310,11 @@ public static unsafe class FastPngWriter
 
     // Writes the filtered row to target and returns the filter used.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static int FilterRow(byte* current, byte* previous, int stride, FastPngFilter filter, byte* work, byte* target)
+    private static int FilterRow(byte* current, byte* previous, int stride, int bpp, FastPngFilter filter, byte* work, byte* target)
     {
         if (filter != FastPngFilter.Adaptive)
         {
-            Apply((int)filter, current, previous, stride, target, false);
+            Apply((int)filter, current, previous, stride, bpp, target, false);
             return (int)filter;
         }
 
@@ -292,7 +322,7 @@ public static unsafe class FastPngWriter
         long bestSum = long.MaxValue;
         for (int candidate = 0; candidate < 5; candidate++)
         {
-            long sum = Apply(candidate, current, previous, stride, work + (long)candidate * workSize, true);
+            long sum = Apply(candidate, current, previous, stride, bpp, work + (long)candidate * workSize, true);
             if (sum < bestSum) { bestSum = sum; best = candidate; }
         }
 
@@ -303,7 +333,7 @@ public static unsafe class FastPngWriter
     // One PNG filter over a row. With sum = true it returns the sum of the output bytes read as signed, absolute
     // (libpng's measure for choosing a filter). a = left, b = above, c = above left.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static long Apply(int filter, byte* current, byte* previous, int stride, byte* target, bool sum)
+    private static long Apply(int filter, byte* current, byte* previous, int stride, int bpp, byte* target, bool sum)
     {
         long total = 0;
         int i = 0;
@@ -319,7 +349,7 @@ public static unsafe class FastPngWriter
                         result = x;
                         break;
                     case 1:
-                        result = Avx2.Subtract(x, Avx.LoadVector256(current + i - Bpp));
+                        result = Avx2.Subtract(x, Avx.LoadVector256(current + i - bpp));
                         break;
                     case 2:
                         result = Avx2.Subtract(x, Avx.LoadVector256(previous + i));
@@ -327,14 +357,14 @@ public static unsafe class FastPngWriter
                     case 3:
                     {
                         // floor((a + b) / 2) without leaving bytes
-                        Vector256<byte> a = Avx.LoadVector256(current + i - Bpp), b = Avx.LoadVector256(previous + i);
+                        Vector256<byte> a = Avx.LoadVector256(current + i - bpp), b = Avx.LoadVector256(previous + i);
                         Vector256<byte> half = Avx2.And(Avx2.ShiftRightLogical(Avx2.Xor(a, b).AsUInt16(), 1).AsByte(), Vector256.Create((byte)0x7F));
                         result = Avx2.Subtract(x, Avx2.Add(Avx2.And(a, b), half));
                         break;
                     }
                     default:
                     {
-                        Vector256<byte> a = Avx.LoadVector256(current + i - Bpp), b = Avx.LoadVector256(previous + i), c = Avx.LoadVector256(previous + i - Bpp);
+                        Vector256<byte> a = Avx.LoadVector256(current + i - bpp), b = Avx.LoadVector256(previous + i), c = Avx.LoadVector256(previous + i - bpp);
                         // pa = |b - c|, pb = |a - c|, pc = |(b - c) + (a - c)|: the sum when both differences have the
                         // same sign (saturated: it only has to be no smaller than pa and pb), else their difference.
                         Vector256<byte> pa = Avx2.Subtract(Avx2.Max(b, c), Avx2.Min(b, c));
@@ -363,7 +393,7 @@ public static unsafe class FastPngWriter
 
         for (; i < stride; i++)
         {
-            int x = current[i], a = current[i - Bpp], b = previous[i], c = previous[i - Bpp], predictor;
+            int x = current[i], a = current[i - bpp], b = previous[i], c = previous[i - bpp], predictor;
             switch (filter)
             {
                 case 0: predictor = 0; break;

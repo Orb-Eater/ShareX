@@ -557,13 +557,21 @@ public static partial class SkiaImageHelpers
                 ? bitmap.ColorSpace == null // one with a colour space keeps Skia's encoder, which writes it into the file
                 : depth == PNGBitDepth.Automatic || !IsImageTransparent(bitmap));
 
-        if (directOpaque && TryGetFastFilter(options.FilterFlags, out FastPngFilter fastFilter))
+        // "Default", the setting ShareX starts with, gives the file the bitmap's own channels: RGB for a bitmap
+        // marked opaque, RGBA for any other. A capture is one of the others with every alpha byte 255, so its file
+        // is RGBA, and stays RGBA here. A colour space on the bitmap keeps Skia's encoder, which writes it.
+        bool directDefault = depth == PNGBitDepth.Default && bitmap.ColorSpace == null &&
+            TryGetDirectPixels(bitmap, out direct, out rowBytes) &&
+            (bitmap.AlphaType == SKAlphaType.Opaque || !IsImageTransparent(bitmap));
+
+        if ((directOpaque || directDefault) && TryGetFastFilter(options.FilterFlags, out FastPngFilter fastFilter))
         {
             // Every screen capture comes this way. Our own writer packs it on several cores: the same pixels
-            // in an ordinary PNG, in about a tenth of the time Skia's single-core encoder takes. A file over the
-            // size limit is not written at all (Skia's encoder stops part way through one).
+            // in an ordinary PNG of the same kind, in about a tenth of the time Skia's single-core encoder
+            // takes. A file over the size limit is not written at all (Skia's encoder stops part way through one).
             bool written = FastPngWriter.WriteOpaque(stream, direct, rowBytes, bitmap.Width, bitmap.Height,
-                bitmap.ColorType == SKColorType.Bgra8888, fastFilter, ToFastPngLevel(options.ZLibLevel), sizeLimit: sizeLimit);
+                bitmap.ColorType == SKColorType.Bgra8888, fastFilter, ToFastPngLevel(options.ZLibLevel), sizeLimit: sizeLimit,
+                alphaChannel: directDefault && bitmap.AlphaType != SKAlphaType.Opaque);
             GC.KeepAlive(bitmap); // the rows were read through a bare pointer
             return written;
         }
