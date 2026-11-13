@@ -44,6 +44,7 @@ namespace ShareX.ImageEditor.Presentation.Controls
         private readonly TextAnnotation _annotation;
         private readonly IBrush _textBrush;
         private TextPresenter? _presenter;
+        private ScrollViewer? _scrollViewer;
         private bool _composing;
 
         // Styled and templated as an ordinary text box.
@@ -56,6 +57,8 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
             Foreground = textBrush;
             Background = Brushes.Transparent;
+            // The theme clips a text box to its bounds, which cut the drop shadow off at the box's edge.
+            ClipToBounds = false;
             // The caret has to show against what is behind the letters: the box when there is one, else the page.
             // On the page the letters themselves may not show (white on a light screenshot); their outline does.
             CaretBrush = !annotation.HasBox && annotation.HasVisibleOutline && Color.TryParse(annotation.StrokeColor, out Color outline)
@@ -91,6 +94,28 @@ namespace ShareX.ImageEditor.Presentation.Controls
                 _presenter.Foreground = Brushes.Transparent;
                 _presenter.PropertyChanged += OnPresenterPropertyChanged;
             }
+
+            if (_scrollViewer != null)
+            {
+                _scrollViewer.PropertyChanged -= OnScrollViewerPropertyChanged;
+            }
+
+            _scrollViewer = e.NameScope.Find<ScrollViewer>("PART_ScrollViewer");
+
+            if (_scrollViewer != null)
+            {
+                _scrollViewer.PropertyChanged += OnScrollViewerPropertyChanged;
+            }
+        }
+
+        // Text that does not fit the box is scrolled by the text box to keep the caret in view (when a finished
+        // text was made smaller than its text and is edited again). The drawn letters have to move with it.
+        private void OnScrollViewerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+        {
+            if (e.Property == ScrollViewer.OffsetProperty)
+            {
+                InvalidateVisual();
+            }
         }
 
         private void OnPresenterPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -125,19 +150,20 @@ namespace ShareX.ImageEditor.Presentation.Controls
             {
                 OutlinedTextControl.DrawBox(context, _annotation, size);
             }
-            else if (!_annotation.HasVisibleOutline)
+            else if (!_annotation.HasVisibleOutline || string.IsNullOrEmpty(Text))
             {
                 DrawBackdrop(context, size);
             }
 
             if (!_composing)
             {
-                OutlinedTextControl.DrawText(context, _annotation, Text, size);
+                OutlinedTextControl.DrawText(context, _annotation, Text, size, _scrollViewer?.Offset ?? default);
             }
         }
 
         // Bare letters (no box, no outline) can have the colour of what is under them, white on a light screenshot
-        // for one. This faint backdrop, there only while typing, keeps the letters and the caret readable.
+        // for one. This faint backdrop, there only while typing, keeps the letters and the caret readable. It also
+        // shows where an empty box without a fill is, before the first letter gives it an outline to show.
         private void DrawBackdrop(DrawingContext context, Size size)
         {
             Color text = (_textBrush as ISolidColorBrush)?.Color ?? Colors.White;

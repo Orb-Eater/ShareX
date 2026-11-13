@@ -113,7 +113,8 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
         // The letters with their outline, laid out in an annotation of the given size. The box a text is typed in
         // draws its text with this too (TextAnnotationEditorBox), so it shows what the finished text will be.
-        internal static void DrawText(DrawingContext context, TextAnnotation annotation, string? text, Size size)
+        // scroll is how far the box being typed in has scrolled text that does not fit it; the finished text has none.
+        internal static void DrawText(DrawingContext context, TextAnnotation annotation, string? text, Size size, Vector scroll = default)
         {
             if (string.IsNullOrEmpty(text)) return;
 
@@ -135,6 +136,10 @@ namespace ShareX.ImageEditor.Presentation.Controls
                 annotation.FontSize,
                 Brushes.Black); // Avalonia requires a brush to properly construct text extents in some backends
 
+            // A word too long for a line is broken over lines, as the text box does while it is typed. The default
+            // replaced it with "…", in the saved image too.
+            formattedText.Trimming = TextTrimming.None;
+
             if (maxTextWidth > 0)
             {
                 formattedText.MaxTextWidth = maxTextWidth;
@@ -148,7 +153,7 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
             originY = Math.Min(originY, Math.Max(verticalPadding, size.Height - textHeight - verticalPadding));
 
-            var textGeometry = formattedText.BuildGeometry(new Point(originX, originY));
+            var textGeometry = formattedText.BuildGeometry(new Point(originX - scroll.X, originY - scroll.Y));
             if (textGeometry == null) return;
 
             // Text color is TextColor, outline color is StrokeColor. A transparent one is not drawn.
@@ -208,6 +213,8 @@ namespace ShareX.ImageEditor.Presentation.Controls
             double padding = TextPadding * 2;
             var annotationBounds = Annotation.GetBounds();
             double boundedWidth = Math.Max(0, annotationBounds.Width - padding - (strokePadding * 2));
+
+            formattedText.Trimming = TextTrimming.None; // as DrawText lays it out
 
             if (boundedWidth > 0)
             {
