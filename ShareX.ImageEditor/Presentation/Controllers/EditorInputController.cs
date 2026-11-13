@@ -1599,6 +1599,7 @@ public class EditorInputController
             HorizontalAlignment = vm.SelectedTextHorizontalAlignment,
             IsBold = vm.TextBold,
             IsItalic = vm.TextItalic,
+            CornerRadius = vm.CornerRadius,
             StartPoint = ToSKPoint(_startPoint),
             EndPoint = ToSKPoint(_startPoint) // Will be updated when text is finalized
         };

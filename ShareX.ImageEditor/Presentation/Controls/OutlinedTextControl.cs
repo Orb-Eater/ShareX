@@ -38,7 +38,7 @@ namespace ShareX.ImageEditor.Presentation.Controls
     /// </summary>
     public class OutlinedTextControl : Control
     {
-        private const double TextPadding = 8;
+        internal const double TextPadding = 8;
 
         public static readonly StyledProperty<TextAnnotation?> AnnotationProperty =
             AvaloniaProperty.Register<OutlinedTextControl, TextAnnotation?>(nameof(Annotation));
@@ -96,6 +96,8 @@ namespace ShareX.ImageEditor.Presentation.Controls
             base.Render(context);
 
             if (Annotation == null || string.IsNullOrEmpty(Annotation.Text)) return;
+
+            DrawBox(context);
 
             var typeface = new Typeface(
                 Annotation.FontFamily,
@@ -167,6 +169,16 @@ namespace ShareX.ImageEditor.Presentation.Controls
             {
                 context.DrawGeometry(fillBrush, null, textGeometry);
             }
+        }
+
+        // The box behind the text: the annotation's fill colour over the whole annotation, with rounded corners.
+        // A transparent fill draws nothing, which is how text looked before the box existed.
+        private void DrawBox(DrawingContext context)
+        {
+            if (Annotation == null || !Color.TryParse(Annotation.FillColor, out Color fill) || fill.A == 0) return;
+
+            double radius = Math.Clamp(Annotation.CornerRadius, 0, Math.Min(Bounds.Width, Bounds.Height) / 2);
+            context.DrawRectangle(new SolidColorBrush(fill), null, new Rect(Bounds.Size), radius, radius);
         }
 
         protected override Size MeasureOverride(Size availableSize)

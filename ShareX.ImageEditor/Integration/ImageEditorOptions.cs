@@ -33,6 +33,7 @@ namespace ShareX.ImageEditor.Integration
     {
         public static readonly Color PrimaryColor = Color.FromArgb(255, 242, 60, 60);
         public static readonly Color SecondaryColor = Color.FromArgb(255, 250, 250, 250);
+        public static readonly Color DefaultTextFillColor = Color.FromArgb(255, 46, 46, 46);
         public static readonly Color DefaultShadowColor = Color.Parse(Annotation.DefaultShadowColorHex);
         public static readonly IReadOnlyList<string> DefaultFavoriteEffects = new[]
         {
@@ -118,6 +119,14 @@ namespace ShareX.ImageEditor.Integration
         [JsonIgnore]
         public Color TextTextColor { get => HexToColor(TextTextColorHex); set => TextTextColorHex = ColorToHex(value); }
 
+        /// <summary>
+        /// Colour of the box behind the text. Transparent means no box.
+        /// </summary>
+        public string TextFillColorHex { get; set; } = ColorToHex(DefaultTextFillColor);
+        [JsonIgnore]
+        public Color TextFillColor { get => HexToColor(TextFillColorHex); set => TextFillColorHex = ColorToHex(value); }
+
+        public int TextCornerRadius { get; set; } = 4;
         public int TextThickness { get; set; } = 8;
         public float TextFontSize { get; set; } = 48;
         public string TextFontFamily { get; set; } = "Segoe UI";

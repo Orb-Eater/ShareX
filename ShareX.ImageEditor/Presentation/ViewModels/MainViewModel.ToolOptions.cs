@@ -170,6 +170,13 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
                 return;
             }
 
+            // The text box keeps its own corner radius, apart from the one rectangles and speech balloons share.
+            if (ActiveTool == EditorTool.Text || (ActiveTool == EditorTool.Select && SelectedAnnotation is TextAnnotation))
+            {
+                Options.TextCornerRadius = value;
+                return;
+            }
+
             bool appliesToCornerRadius = ActiveTool is EditorTool.Rectangle or EditorTool.SpeechBalloon;
 
             if (ActiveTool == EditorTool.Select && SelectedAnnotation != null)
@@ -227,6 +234,10 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
                     break;
                 case EditorTool.Highlight:
                     Options.HighlightFillColor = color;
+                    break;
+                case EditorTool.Text:
+                case EditorTool.Select when SelectedAnnotation is TextAnnotation:
+                    Options.TextFillColor = color;
                     break;
                 default:
                     Options.FillColor = color;
@@ -492,6 +503,12 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
         }
 
         private bool _isLoadingOptions;
+
+        /// <summary>
+        /// True while the options of a newly chosen tool are being loaded. The values set then belong to the tool,
+        /// not to an annotation that is still selected.
+        /// </summary>
+        public bool IsLoadingToolOptions => _isLoadingOptions;
 
         [ObservableProperty]
         private float _effectStrength = 1;
@@ -860,10 +877,10 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
 
         public bool ShowFillColor => ActiveTool switch
         {
-            EditorTool.Rectangle or EditorTool.Ellipse or EditorTool.SpeechBalloon or EditorTool.Step or EditorTool.Highlight => true,
+            EditorTool.Rectangle or EditorTool.Ellipse or EditorTool.SpeechBalloon or EditorTool.Step or EditorTool.Highlight or EditorTool.Text => true,
             EditorTool.Select => _selectedAnnotation != null && _selectedAnnotation.ToolType switch
             {
-                EditorTool.Rectangle or EditorTool.Ellipse or EditorTool.SpeechBalloon or EditorTool.Step or EditorTool.Highlight => true,
+                EditorTool.Rectangle or EditorTool.Ellipse or EditorTool.SpeechBalloon or EditorTool.Step or EditorTool.Highlight or EditorTool.Text => true,
                 _ => false
             },
             _ => false
@@ -957,10 +974,10 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
 
         public bool ShowCornerRadius => ActiveTool switch
         {
-            EditorTool.Rectangle or EditorTool.SpeechBalloon => true,
+            EditorTool.Rectangle or EditorTool.SpeechBalloon or EditorTool.Text => true,
             EditorTool.Select => _selectedAnnotation?.ToolType switch
             {
-                EditorTool.Rectangle or EditorTool.SpeechBalloon => true,
+                EditorTool.Rectangle or EditorTool.SpeechBalloon or EditorTool.Text => true,
                 _ => false
             },
             _ => false
@@ -1267,8 +1284,10 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
                     break;
                 case EditorTool.Text:
                     SelectedColorValue = Options.TextBorderColor;
+                    FillColorValue = Options.TextFillColor;
                     TextColorValue = Options.TextTextColor;
                     StrokeWidth = Options.TextThickness;
+                    CornerRadius = Options.TextCornerRadius;
                     ShadowEnabled = Options.Shadow;
                     FontSize = Options.TextFontSize;
                     SelectedFontFamily = NormalizeFontFamily(Options.TextFontFamily);

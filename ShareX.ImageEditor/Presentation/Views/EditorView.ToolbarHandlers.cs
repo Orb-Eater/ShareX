@@ -547,6 +547,10 @@ namespace ShareX.ImageEditor.Presentation.Views
                         balloonControl.InvalidateVisual();
                     }
                     break;
+                case TextAnnotation textAnnotation:
+                    textAnnotation.CornerRadius = clampedRadius;
+                    selected.InvalidateVisual();
+                    break;
             }
         }
 

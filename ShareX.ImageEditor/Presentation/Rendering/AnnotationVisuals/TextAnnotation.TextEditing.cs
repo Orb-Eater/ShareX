@@ -25,6 +25,7 @@
 
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Media;
 using ShareX.ImageEditor.Presentation.Controls;
 using ShareX.ImageEditor.Presentation.Helpers;
@@ -40,9 +41,11 @@ public partial class TextAnnotation
         var textBox = new TextBox
         {
             Foreground = textBrush,
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(1),
-            BorderBrush = Brushes.White,
+            CaretBrush = textBrush,
+            Background = CreateEditorBackground(),
+            BorderThickness = new Thickness(EditorBorderThickness),
+            BorderBrush = EditorBorderBrush,
+            CornerRadius = new CornerRadius(Math.Max(0, CornerRadius)),
             FontSize = FontSize,
             FontFamily = new Avalonia.Media.FontFamily(FontFamily),
             FontWeight = IsBold ? Avalonia.Media.FontWeight.Bold : Avalonia.Media.FontWeight.Normal,
@@ -51,13 +54,14 @@ public partial class TextAnnotation
             HorizontalContentAlignment = TextHorizontalAlignmentHelper.ToHorizontalContentAlignment(HorizontalAlignment),
             VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
             Text = string.Empty,
-            Padding = new Thickness(4),
+            Padding = new Thickness(GetEditorPadding()),
             AcceptsReturn = false,
             Tag = this,
-            MinWidth = 0
+            MinWidth = 0,
+            MinHeight = 0
         };
 
-        SetTransparentEditorBackground(textBox);
+        ApplyEditorAppearance(textBox);
 
         if (ShadowEnabled)
         {
@@ -78,12 +82,44 @@ public partial class TextAnnotation
             (float)(Canvas.GetTop(textBox) + height));
     }
 
-    private static void SetTransparentEditorBackground(TextBox textBox)
+    private const double EditorBorderThickness = 1;
+
+    // Thin and neutral: it only marks the box as being typed in, and goes when the text is finished.
+    private static readonly IBrush EditorBorderBrush = new SolidColorBrush(Color.FromArgb(160, 128, 128, 128));
+
+    private IBrush CreateEditorBackground()
     {
-        // Force Avalonia's internal text box states to be transparent
-        textBox.Resources["TextControlBackground"] = Brushes.Transparent;
-        textBox.Resources["TextControlBackgroundFocused"] = Brushes.Transparent;
-        textBox.Resources["TextControlBackgroundPointerOver"] = Brushes.Transparent;
+        return Color.TryParse(FillColor, out Color fill) && fill.A > 0 ? new SolidColorBrush(fill) : Brushes.Transparent;
+    }
+
+    // The finished text keeps this much room around it (see OutlinedTextControl); the text box border is part of it,
+    // so the text sits in the same place while it is typed as after it is finished.
+    private double GetEditorPadding()
+    {
+        return Math.Max(0, OutlinedTextControl.TextPadding + StrokeWidth - EditorBorderThickness);
+    }
+
+    // The app theme styles the parts inside a text box directly (its background and border while focused or hovered,
+    // and its text colour), which hid whatever was set on the text box: the box being typed in was always the
+    // theme's dark box with the theme's text colour, and the text then looked different once it was finished.
+    // Values set on those parts themselves win over the theme, so the box shows the annotation's own look.
+    private static void ApplyEditorAppearance(TextBox textBox)
+    {
+        textBox.TemplateApplied += (_, args) =>
+        {
+            if (args.NameScope.Find<Border>("PART_BorderElement") is { } border)
+            {
+                border.Background = textBox.Background;
+                border.BorderBrush = textBox.BorderBrush;
+                border.BorderThickness = textBox.BorderThickness;
+                border.CornerRadius = textBox.CornerRadius;
+            }
+
+            if (args.NameScope.Find<TextPresenter>("PART_TextPresenter") is { } presenter)
+            {
+                presenter.Foreground = textBox.Foreground;
+            }
+        };
     }
 
     internal TextBox CreateTextEditor()
@@ -96,28 +132,32 @@ public partial class TextAnnotation
                 : StrokeColor;
         }
 
+        var textBrush = new SolidColorBrush(Color.Parse(textColor));
         var textBox = new TextBox
         {
             Text = Text,
-            Foreground = new SolidColorBrush(Color.Parse(textColor)),
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(1),
-            BorderBrush = Brushes.Gray,
+            Foreground = textBrush,
+            CaretBrush = textBrush,
+            Background = CreateEditorBackground(),
+            BorderThickness = new Thickness(EditorBorderThickness),
+            BorderBrush = EditorBorderBrush,
+            CornerRadius = new CornerRadius(Math.Max(0, CornerRadius)),
             FontSize = FontSize,
             FontFamily = new Avalonia.Media.FontFamily(string.IsNullOrWhiteSpace(FontFamily) ? "Segoe UI" : FontFamily),
             FontWeight = IsBold ? FontWeight.Bold : FontWeight.Normal,
             FontStyle = IsItalic ? FontStyle.Italic : FontStyle.Normal,
-            Padding = new Thickness(4),
+            Padding = new Thickness(GetEditorPadding()),
             AcceptsReturn = false,
             TextAlignment = TextHorizontalAlignmentHelper.ToAvaloniaTextAlignment(HorizontalAlignment),
             HorizontalContentAlignment = TextHorizontalAlignmentHelper.ToHorizontalContentAlignment(HorizontalAlignment),
             VerticalContentAlignment = global::Avalonia.Layout.VerticalAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
             MinWidth = 20,
+            MinHeight = 0,
             Tag = this
         };
 
-        SetTransparentEditorBackground(textBox);
+        ApplyEditorAppearance(textBox);
 
         // Apply rotation to make editing match display
         if (RotationAngle != 0)
