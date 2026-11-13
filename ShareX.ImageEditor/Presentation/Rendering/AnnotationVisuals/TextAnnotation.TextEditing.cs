@@ -57,6 +57,9 @@ public partial class TextAnnotation
             MinHeight = 0
         };
 
+        // It grows from the click point as its alignment holds it: rightwards, both ways, or leftwards.
+        textBox.FollowAnchor();
+
         if (ShadowEnabled)
         {
             textBox.Effect = ShareX.ImageEditor.Presentation.Helpers.ShadowEffectHelper.CreateDropShadow(this);
@@ -73,9 +76,9 @@ public partial class TextAnnotation
         double height = naturalSize.Height > 0 ? naturalSize.Height : textBox.Bounds.Height;
 
         // Whole pixels, stored so that they are never a hair over (SetSize), as an edited text gets them: a raw size
-        // stored as floats could lay out one pixel off the box the text was typed in. The rectangle starts where
-        // the text box is, at the annotation's start point.
-        SetSize(Math.Ceiling(width), Math.Ceiling(height));
+        // stored as floats could lay out one pixel off the box the text was typed in. The rectangle is the click
+        // point until now; it grows from there as the text box did (SetSizeAnchored).
+        SetSizeAnchored(Math.Ceiling(width), Math.Ceiling(height));
     }
 
     // A rectangle within this of the text's own size counts as never resized (sizes are stored as floats and
@@ -104,11 +107,13 @@ public partial class TextAnnotation
     {
         if (HasNaturalSize())
         {
-            // As the box a new text is typed in: no smallest width, and only typed line breaks.
+            // As the box a new text is typed in: no smallest width, only typed line breaks, and it grows from the
+            // point its alignment keeps still.
             textBox.Width = double.NaN;
             textBox.Height = double.NaN;
             textBox.MinWidth = 0;
             textBox.TextWrapping = TextWrapping.NoWrap;
+            (textBox as TextAnnotationEditorBox)?.FollowAnchor();
         }
         else
         {
@@ -151,8 +156,9 @@ public partial class TextAnnotation
         return true;
     }
 
-    // Fits the rectangle to the text from its top left corner. Free: it becomes the text's own size. Not free (a
-    // rectangle that was resized): it keeps its width, where the lines wrap, and is made taller when they need it.
+    // Fits the rectangle to the text. Free: it becomes the text's own size, growing and shrinking from the point its
+    // alignment keeps still (SetSizeAnchored). Not free (a rectangle that was resized): it keeps its width, where the
+    // lines wrap, and is made taller downwards when they need it.
     private void FitToText(bool free)
     {
         SKRect bounds = GetBounds();
@@ -162,7 +168,7 @@ public partial class TextAnnotation
             Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
             if (naturalSize.Width > 0 && naturalSize.Height > 0) // no text left: the rectangle stays
             {
-                SetSize(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height));
+                SetSizeAnchored(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height));
             }
         }
         else
@@ -183,7 +189,70 @@ public partial class TextAnnotation
     internal void SetSize(double width, double height)
     {
         SKRect bounds = GetBounds();
-        float left = bounds.Left, top = bounds.Top;
+        SetRect(bounds.Left, bounds.Top, width, height);
+    }
+
+    /// <summary>
+    /// Gives a rectangle that was never resized a new size, keeping still the point its alignment holds: the top left
+    /// corner for left-aligned text, the middle of the top edge for centred text, the top right corner for
+    /// right-aligned text. So a centred text grows both ways from its middle and a right-aligned one leftwards.
+    /// </summary>
+    internal void SetSizeAnchored(double width, double height)
+    {
+        Point topLeft = GetAnchoredTopLeft(GetStoredBounds(), width, height, HorizontalAlignment, RotationAngle);
+        SetRect(topLeft.X, topLeft.Y, width, height);
+    }
+
+    /// <summary>
+    /// The rectangle as stored, without the smallest size GetBounds gives it: for a new text that is still its click
+    /// point, so a centred or right-aligned text is held at the click itself, not 5 or 10 pixels to its right.
+    /// </summary>
+    internal SKRect GetStoredBounds()
+    {
+        return new SKRect(
+            Math.Min(StartPoint.X, EndPoint.X),
+            Math.Min(StartPoint.Y, EndPoint.Y),
+            Math.Max(StartPoint.X, EndPoint.X),
+            Math.Max(StartPoint.Y, EndPoint.Y));
+    }
+
+    /// <summary>
+    /// Where the top left corner of a rectangle of the new size goes so that the point its alignment holds (see
+    /// SetSizeAnchored) stays where it is on the page. Measured in the rectangle's own frame: a turned text turns
+    /// about its middle, so for it both corners move, and the text itself does not.
+    /// </summary>
+    internal static Point GetAnchoredTopLeft(SKRect from, double width, double height, TextHorizontalAlignment alignment, double angle)
+    {
+        double anchor = alignment switch
+        {
+            TextHorizontalAlignment.Center => 0.5,
+            TextHorizontalAlignment.Right => 1,
+            _ => 0
+        };
+
+        if (angle == 0)
+        {
+            return new Point(from.Left + (anchor * (from.Width - width)), from.Top);
+        }
+
+        double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+
+        // The held point on the page: offset from the old middle, turned.
+        double fromX = (anchor * from.Width) - (from.Width / 2), fromY = -from.Height / 2;
+        double pageX = from.MidX + (fromX * cos) - (fromY * sin);
+        double pageY = from.MidY + (fromX * sin) + (fromY * cos);
+
+        // The new middle that puts the same point of the new size there.
+        double toX = (anchor * width) - (width / 2), toY = -height / 2;
+        double middleX = pageX - ((toX * cos) - (toY * sin));
+        double middleY = pageY - ((toX * sin) + (toY * cos));
+        return new Point(middleX - (width / 2), middleY - (height / 2));
+    }
+
+    // Stores a rectangle so that its size is never a hair over the one asked for (see SetSize).
+    private void SetRect(double x, double y, double width, double height)
+    {
+        float left = (float)x, top = (float)y;
         float right = (float)(left + width), bottom = (float)(top + height);
 
         while (right > left && (double)(right - left) > width) right = MathF.BitDecrement(right);
