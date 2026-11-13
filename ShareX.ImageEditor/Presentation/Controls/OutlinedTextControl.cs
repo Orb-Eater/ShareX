@@ -91,6 +91,41 @@ namespace ShareX.ImageEditor.Presentation.Controls
             return new Size(width, height);
         }
 
+        // The height a text needs in an annotation of the given width: its lines are broken to that width the way
+        // DrawText breaks them.
+        internal static double MeasureHeightAtWidth(TextAnnotation annotation, double width)
+        {
+            if (annotation == null || string.IsNullOrEmpty(annotation.Text))
+            {
+                return 0;
+            }
+
+            var typeface = new Typeface(
+                annotation.FontFamily,
+                annotation.IsItalic ? FontStyle.Italic : FontStyle.Normal,
+                annotation.IsBold ? FontWeight.Bold : FontWeight.Normal);
+
+            var formattedText = new FormattedText(
+                annotation.Text,
+                CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                typeface,
+                annotation.FontSize,
+                Brushes.Black);
+
+            formattedText.Trimming = TextTrimming.None;
+
+            double inset = (TextPadding + annotation.StrokeWidth) * 2;
+            double maxTextWidth = Math.Max(0, width - inset);
+            if (maxTextWidth > 0)
+            {
+                formattedText.MaxTextWidth = maxTextWidth;
+            }
+
+            double height = formattedText.Height + inset;
+            return double.IsNaN(height) || height < 0 ? 0 : height;
+        }
+
         public override void Render(DrawingContext context)
         {
             base.Render(context);
