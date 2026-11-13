@@ -372,10 +372,22 @@ public class EditorCore : IDisposable
             bounds = SKRect.Union(bounds, new SKRect(tail.X, tail.Y, tail.X, tail.Y));
         }
 
-        float stroke = Math.Max(0, annotation.StrokeWidth) / 2f;
-        bounds.Inflate(stroke, stroke);
+        // A text draws its outline around its letters, inside its rectangle (which has room for it), and is cut at
+        // that rectangle (OutlinedTextControl). Counted as sticking out as well, a text that only touched an image
+        // edge grew the canvas there.
+        if (annotation is not TextAnnotation)
+        {
+            float stroke = Math.Max(0, annotation.StrokeWidth) / 2f;
+            bounds.Inflate(stroke, stroke);
+        }
+
         return bounds;
     }
+
+    /// <summary>
+    /// How far past an image edge still counts as inside, so sub-pixel rounding does not grow the canvas.
+    /// </summary>
+    public const float AutoExpandTolerance = 0.5f;
 
     /// <summary>
     /// Grows the canvas so the given annotations fit inside it. Only sides that the annotations
@@ -419,8 +431,7 @@ public class EditorCore : IDisposable
         float width = SourceImage.Width;
         float height = SourceImage.Height;
 
-        // Small tolerance so sub-pixel rounding does not trigger an expansion.
-        const float tolerance = 0.5f;
+        const float tolerance = AutoExpandTolerance;
         int left = u.Left < -tolerance ? (int)Math.Ceiling(margin - u.Left) : 0;
         int top = u.Top < -tolerance ? (int)Math.Ceiling(margin - u.Top) : 0;
         int right = u.Right > width + tolerance ? (int)Math.Ceiling(u.Right + margin - width) : 0;
