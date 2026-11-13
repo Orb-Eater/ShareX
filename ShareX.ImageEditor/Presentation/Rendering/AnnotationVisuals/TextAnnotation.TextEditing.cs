@@ -217,6 +217,12 @@ public partial class TextAnnotation
     }
 
     /// <summary>
+    /// Stores the rectangle the edit box has now, so a later refit anchors on this box and not on the one from
+    /// when editing started. See <see cref="TextAnnotationEditorBox.RebaseAnchor"/>.
+    /// </summary>
+    internal void SetStoredRect(double x, double y, double width, double height) => SetRect(x, y, width, height);
+
+    /// <summary>
     /// Where the top left corner of a rectangle of the new size goes so that the point its alignment holds (see
     /// SetSizeAnchored) stays where it is on the page. Measured in the rectangle's own frame: a turned text turns
     /// about its middle, so for it both corners move, and the text itself does not.
