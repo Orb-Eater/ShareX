@@ -422,6 +422,8 @@ namespace ShareX.ImageEditor.Presentation.Views
                         vm.SelectedTextHorizontalAlignment = text.HorizontalAlignment;
                         vm.TextBold = text.IsBold;
                         vm.TextItalic = text.IsItalic;
+                        vm.FillColor = text.FillColor;
+                        vm.CornerRadius = text.CornerRadius;
                         if (!string.IsNullOrEmpty(text.TextColor))
                             vm.TextColorValue = Avalonia.Media.Color.Parse(text.TextColor);
                     }
@@ -587,6 +589,15 @@ namespace ShareX.ImageEditor.Presentation.Views
                 if (e.PropertyName == nameof(MainViewModel.IsSettingsPanelOpen) && vm.IsSettingsPanelOpen)
                 {
                     EnsureBackgroundSettingsPanel();
+                }
+
+                // Choosing another tool loads that tool's saved options, and only afterwards is the selection cleared.
+                // Without this check those options were also written into the annotation that was still selected:
+                // a text lost its box, or took the rectangle colour, the moment another tool was picked.
+                if (vm.IsLoadingToolOptions && e.PropertyName is nameof(MainViewModel.SelectedColor) or nameof(MainViewModel.StrokeWidth)
+                    or nameof(MainViewModel.FillColorValue) or nameof(MainViewModel.TextColorValue) or nameof(MainViewModel.CornerRadius))
+                {
+                    return;
                 }
 
                 if (e.PropertyName == nameof(MainViewModel.SelectedColor))

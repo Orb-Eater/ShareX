@@ -68,6 +68,11 @@ public partial class TextAnnotation : Annotation
     /// </summary>
     public TextHorizontalAlignment HorizontalAlignment { get; set; } = TextHorizontalAlignment.Center;
 
+    /// <summary>
+    /// Corner radius of the box behind the text. The box is drawn in FillColor and only when that is not transparent.
+    /// </summary>
+    public int CornerRadius { get; set; } = 4;
+
     public TextAnnotation()
     {
         ToolType = EditorTool.Text;
