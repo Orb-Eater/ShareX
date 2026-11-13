@@ -293,6 +293,9 @@ internal static class Program
                 await Task.Delay(200);
             }
 
+            // The PNG writer for captures, off the UI thread: its first use would otherwise be the first save.
+            await Task.Run(FastPngWriter.WarmUp);
+
             // Let the spare window (posted at Background priority) be built first.
             await Task.Delay(500);
             await WarmUpMemoryRelease.RunAsync();
