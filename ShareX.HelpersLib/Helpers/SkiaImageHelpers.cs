@@ -152,13 +152,16 @@ public static partial class SkiaImageHelpers
     {
         if (TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes))
         {
-            // Skia reads every pixel of an opaque bitmap as alpha 255, whatever its fourth byte holds.
+            // A bitmap marked opaque has no see-through pixel, whatever its fourth bytes hold: a 32-bit image read
+            // from the clipboard can carry zeros there. (The copy below keeps those bytes and so answered "yes".)
             if (bitmap.AlphaType == SKAlphaType.Opaque) return false;
-            for (int y = 0; y < bitmap.Height; y++)
+            bool transparent = false;
+            for (int y = 0; y < bitmap.Height && !transparent; y++)
             {
-                if (HasTransparentPixel(new ReadOnlySpan<uint>(direct + (long)y * rowBytes, bitmap.Width))) return true;
+                transparent = HasTransparentPixel(new ReadOnlySpan<uint>(direct + (long)y * rowBytes, bitmap.Width));
             }
-            return false;
+            GC.KeepAlive(bitmap); // the rows were read through a bare pointer
+            return transparent;
         }
 
         using SkiaPixelBuffer pixels = new(bitmap, true, PixelAccess.ReadOnly);
@@ -202,7 +205,8 @@ public static partial class SkiaImageHelpers
 
     /// <summary>
     /// The image as a 24 bpp bottom-up BMP without its 14-byte file header (a CF_DIB block), byte for byte what
-    /// SaveBMP writes after that header. Null when a pixel is not fully opaque or the pixels cannot be read in place.
+    /// SaveBMP writes after that header for an image with no see-through pixel. Null when the pixels cannot be read
+    /// in place, or when a pixel is see-through (a bitmap marked opaque counts as having none).
     /// </summary>
     public static unsafe byte[] TryCreateOpaqueDib(SKBitmap bitmap)
     {
@@ -223,7 +227,7 @@ public static partial class SkiaImageHelpers
         BitConverter.TryWriteBytes(dib.AsSpan(24), 3780);
         BitConverter.TryWriteBytes(dib.AsSpan(28), 3780);
 
-        // Every alpha byte is 255, so the stored colours are already the straight ones.
+        // No pixel is see-through, so the stored colours are already the straight ones.
         int blue = bitmap.ColorType == SKColorType.Bgra8888 ? 0 : 2, red = 2 - blue;
         fixed (byte* output = dib)
         {
@@ -240,6 +244,7 @@ public static partial class SkiaImageHelpers
             }
         }
 
+        GC.KeepAlive(bitmap); // the rows were read through a bare pointer
         return dib;
     }
 
@@ -531,6 +536,7 @@ public static partial class SkiaImageHelpers
             using SKPixmap pixels = new(new SKImageInfo(bitmap.Width, bitmap.Height, bitmap.ColorType, SKAlphaType.Opaque),
                 (IntPtr)direct, rowBytes);
             encoded = pixels.Encode(output, options);
+            GC.KeepAlive(bitmap); // the pixmap only borrows the bitmap's memory
         }
         else if (opaqueOutput && (bitmap.AlphaType != SKAlphaType.Opaque ||
             bitmap.ColorType is not (SKColorType.Bgra8888 or SKColorType.Rgba8888)))
