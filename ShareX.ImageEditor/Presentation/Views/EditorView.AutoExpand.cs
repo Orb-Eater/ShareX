@@ -27,6 +27,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using ShareX.ImageEditor.Core.Annotations;
+using ShareX.ImageEditor.Presentation.Controls;
 using ShareX.ImageEditor.Presentation.ViewModels;
 using SkiaSharp;
 
@@ -172,6 +173,15 @@ namespace ShareX.ImageEditor.Presentation.Views
                     return;
                 }
             }
+        }
+
+        /// <summary>
+        /// A centred or right-aligned text box that grows from its middle or its right edge is kept inside the image
+        /// while it fits (TextAnnotation.ClampAnchoredLeft). The box reads the width once, on its first measure.
+        /// </summary>
+        internal void KeepInsideImage(TextBox textBox)
+        {
+            (textBox as TextAnnotationEditorBox)?.KeepInsideImage(() => _editorCore.CanvasSize.Width);
         }
 
         /// <summary>

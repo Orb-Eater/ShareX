@@ -77,10 +77,9 @@ public partial class TextAnnotation
 
         // Whole pixels, stored so that they are never a hair over (SetSize), as an edited text gets them: a raw size
         // stored as floats could lay out one pixel off the box the text was typed in. The rectangle is the click
-        // point until now; it grows from there as the text box did (SetSizeAnchored). The limit is the image width
-        // the box was kept inside while typing, so finishing lands on that same box.
-        double limit = textBox is TextAnnotationEditorBox editor ? editor.AnchorLimitWidth : double.PositiveInfinity;
-        SetSizeAnchored(Math.Ceiling(width), Math.Ceiling(height), limit);
+        // point until now; it grows from there as the text box did (SetSizeAnchored), inside the range that box was
+        // kept inside while typing, so finishing lands on that same box.
+        SetSizeAnchored(Math.Ceiling(width), Math.Ceiling(height), TextAnnotationEditorBox.LimitsOf(textBox));
     }
 
     // A rectangle within this of the text's own size counts as never resized (sizes are stored as floats and
@@ -133,20 +132,21 @@ public partial class TextAnnotation
     internal void SetEditedText(TextBox textBox)
     {
         Text = textBox.Text ?? string.Empty;
-        double limit = textBox is TextAnnotationEditorBox editor ? editor.AnchorLimitWidth : double.PositiveInfinity;
-        FitToText(free: double.IsNaN(textBox.Width), limit);
+        FitToText(free: double.IsNaN(textBox.Width), TextAnnotationEditorBox.LimitsOf(textBox));
     }
 
     /// <summary>
     /// Changes the font, its size or weight, or the outline width, all of which change the size the text takes.
     /// A rectangle that had the text's own size before keeps having it, so the box behind a text follows a
     /// font size picked after the text was finished. A resized rectangle is left as it is. Returns true when
-    /// the rectangle changed.
+    /// the rectangle changed. Given the image's width, a centred or right-aligned rectangle that grows stays inside
+    /// the image while it fits (ClampAnchoredLeft).
     /// </summary>
-    internal bool ChangeStyle(Action change, double canvasWidth = double.PositiveInfinity)
+    internal bool ChangeStyle(Action change, double imageWidth = double.PositiveInfinity)
     {
         Size before = OutlinedTextControl.MeasureNaturalSize(this);
         bool natural = HasNaturalSize();
+        AnchorLimits limits = GetAnchorLimits(imageWidth);
         change();
 
         // Picking a text sets its own values again; that is no change and must not move anything.
@@ -155,14 +155,14 @@ public partial class TextAnnotation
             return false;
         }
 
-        FitToText(free: true, canvasWidth);
+        FitToText(free: true, limits);
         return true;
     }
 
     // Fits the rectangle to the text. Free: it becomes the text's own size, growing and shrinking from the point its
     // alignment keeps still (SetSizeAnchored). Not free (a rectangle that was resized): it keeps its width, where the
     // lines wrap, and is made taller downwards when they need it.
-    private void FitToText(bool free, double canvasWidth = double.PositiveInfinity)
+    private void FitToText(bool free, AnchorLimits limits)
     {
         SKRect bounds = GetBounds();
 
@@ -171,7 +171,7 @@ public partial class TextAnnotation
             Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
             if (naturalSize.Width > 0 && naturalSize.Height > 0) // no text left: the rectangle stays
             {
-                SetSizeAnchored(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height), canvasWidth);
+                SetSizeAnchored(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height), limits);
             }
         }
         else
@@ -198,52 +198,77 @@ public partial class TextAnnotation
     /// <summary>
     /// Gives a rectangle that was never resized a new size, keeping still the point its alignment holds: the top left
     /// corner for left-aligned text, the middle of the top edge for centred text, the top right corner for
-    /// right-aligned text. So a centred text grows both ways from its middle and a right-aligned one leftwards.
+    /// right-aligned text. So a centred text grows both ways from its middle and a right-aligned one leftwards,
+    /// inside the given range while it fits (ClampAnchoredLeft; none given: not limited).
     /// </summary>
-    internal void SetSizeAnchored(double width, double height, double canvasWidth = double.PositiveInfinity)
+    internal void SetSizeAnchored(double width, double height, AnchorLimits limits = default)
     {
         Point topLeft = GetAnchoredTopLeft(GetStoredBounds(), width, height, HorizontalAlignment, RotationAngle);
-        double x = ClampAnchoredLeft(topLeft.X, width, height, HorizontalAlignment, RotationAngle, canvasWidth);
+        double x = ClampAnchoredLeft(topLeft.X, width, height, HorizontalAlignment, RotationAngle, limits);
         SetRect(x, topLeft.Y, width, height);
     }
 
     /// <summary>
-    /// Shifts a top-left horizontally so a centred or right-aligned box stays inside the image while it still fits.
-    /// Growing around the middle, or leftwards from the right edge, stops at an image edge and continues the other
-    /// way. Wider than the image: the box's horizontal span starts at the image's left and extends past the right.
-    /// Left-aligned text is not moved. A turned box is shifted by its axis-aligned horizontal span (it turns about
-    /// its middle), so the turned letters stay inside until that span is wider than the image.
+    /// The horizontal range a never-resized centred or right-aligned box is kept inside while it fits, in annotation
+    /// pixels (ClampAnchoredLeft). The default value is no range: the box is not limited.
     /// </summary>
-    internal static double ClampAnchoredLeft(double left, double width, double height, TextHorizontalAlignment alignment, double angle, double canvasWidth)
+    internal readonly record struct AnchorLimits(double Left, double Right)
     {
-        if (alignment == TextHorizontalAlignment.Left || !(canvasWidth > 1) || double.IsInfinity(canvasWidth) || !(width > 0) || !(height > 0))
+        internal bool Limited => Right > Left;
+    }
+
+    /// <summary>
+    /// The range for this text in an image of the given width: the image, widened to what the rectangle covers
+    /// now, before it is typed in or restyled. A text that already sticks out of the image is then not pulled inside
+    /// by opening or restyling it; it only does not go further out. Not limited without a real width.
+    /// </summary>
+    internal AnchorLimits GetAnchorLimits(double imageWidth)
+    {
+        if (!(imageWidth > 0) || double.IsInfinity(imageWidth))
+        {
+            return default;
+        }
+
+        SKRect stored = GetStoredBounds();
+        HorizontalSpan(stored.Left, (double)stored.Right - stored.Left, (double)stored.Bottom - stored.Top, RotationAngle, out double spanLeft, out double spanRight);
+        return new AnchorLimits(Math.Min(0, spanLeft), Math.Max(imageWidth, spanRight));
+    }
+
+    /// <summary>
+    /// Shifts a top-left horizontally so a centred or right-aligned box stays inside the range (the image) while it
+    /// still fits. Growing around the middle, or leftwards from the right edge, stops at an edge of the range and
+    /// continues the other way. Wider than the range: the box's horizontal span starts at the range's left and
+    /// extends past its right. Left-aligned text is not moved. A turned box is shifted by its axis-aligned
+    /// horizontal span (it turns about its middle), so the turned letters stay inside until that span is too wide.
+    /// </summary>
+    internal static double ClampAnchoredLeft(double left, double width, double height, TextHorizontalAlignment alignment, double angle, AnchorLimits limits)
+    {
+        if (alignment == TextHorizontalAlignment.Left || !limits.Limited || !(width > 0) || !(height > 0))
         {
             return left;
         }
 
         HorizontalSpan(left, width, height, angle, out double spanLeft, out double spanRight);
-        double span = spanRight - spanLeft;
-        if (!(span > 0))
+        if (!(spanRight > spanLeft))
         {
             return left;
         }
 
-        double shift = span <= canvasWidth
-            ? spanLeft < 0 ? -spanLeft : spanRight > canvasWidth ? canvasWidth - spanRight : 0
-            : -spanLeft;
-        return left + shift;
+        if (spanRight - spanLeft > limits.Right - limits.Left || spanLeft < limits.Left)
+        {
+            return left + (limits.Left - spanLeft);
+        }
+
+        return spanRight > limits.Right ? left + (limits.Right - spanRight) : left;
     }
+
+    // A text turns about the middle of its rectangle. Whole turns leave it as it is.
+    private static bool IsTurned(double angle) => angle % 360 != 0;
 
     // The horizontal span of the rectangle turned about its middle, in the same coordinates as its top left.
     internal static void HorizontalSpan(double left, double width, double height, double angle, out double spanLeft, out double spanRight)
     {
-        double normalized = angle % 360;
-        if (normalized < 0)
-        {
-            normalized += 360;
-        }
-
-        if (normalized < 0.001 || normalized > 359.999)
+        if (!IsTurned(angle))
         {
             spanLeft = left;
             spanRight = left + width;
@@ -296,7 +321,7 @@ public partial class TextAnnotation
             _ => 0
         };
 
-        if (angle == 0)
+        if (!IsTurned(angle))
         {
             return new Point(from.Left + (anchor * (from.Width - width)), from.Top);
         }
