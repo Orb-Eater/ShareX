@@ -220,7 +220,10 @@ public partial class RegionCaptureWindow : Window
     {
         if (_keyboardInputEnabled && !_closing && _request != null &&
             e.KeyModifiers == KeyModifiers.None && _viewModel?.IsModalOpen != true &&
-            (e.Key == Key.Tab || (e.Key == Key.NumPad0 && !e.Handled))) // NumPad0 matches ShareX 21; a toolbar hotkey on it wins.
+            (e.Key == Key.Tab || (e.Key == Key.NumPad0 && !e.Handled)) && // NumPad0 matches ShareX 21; a toolbar hotkey on it wins.
+            // Not while a text box is typed in (a caption, a slider's number): a text box leaves a digit's key-down
+            // unhandled, so a 0 from the number pad ended the typing and switched to the region tool.
+            e.Source is not TextBox && FocusManager?.GetFocusedElement() is not TextBox)
         {
             ActivateRegionTool();
             e.Handled = true;
