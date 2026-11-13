@@ -593,6 +593,14 @@ namespace ShareX.ImageEditor.Presentation.Views
             var selected = _selectionController.SelectedShape;
             if (selected?.Tag is TextAnnotation textAnnotation)
             {
+                // While the box is open, keep its place: the next key anchors on this rectangle, not on the one
+                // from when the text was opened. A closed text already stores the rectangle it is drawn in.
+                if (textAnnotation.HorizontalAlignment != alignment
+                    && FindActiveTextEditor(textAnnotation) is TextAnnotationEditorBox editorBox)
+                {
+                    editorBox.RebaseAnchor();
+                }
+
                 textAnnotation.HorizontalAlignment = alignment;
 
                 if (selected is OutlinedTextControl outlinedText)

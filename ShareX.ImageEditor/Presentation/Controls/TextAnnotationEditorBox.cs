@@ -124,6 +124,31 @@ namespace ShareX.ImageEditor.Presentation.Controls
             }
         }
 
+        // The alignment changed while this box was open. The rectangle the annotation still stores is the one from
+        // when the box was opened, so the next measure would anchor the new alignment on that old rectangle and the
+        // box would jump. Remember the box as it is now; growth from here uses the new alignment's point on it.
+        internal void RebaseAnchor()
+        {
+            if (!_followAnchor || _parentOffset is not Vector offset)
+            {
+                return;
+            }
+
+            double left = Canvas.GetLeft(this), top = Canvas.GetTop(this);
+            if (double.IsNaN(left) || double.IsNaN(top))
+            {
+                return;
+            }
+
+            double width = Bounds.Width, height = Bounds.Height;
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            _annotation.SetStoredRect(left - offset.X, top - offset.Y, width, height);
+        }
+
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
         {
             base.OnApplyTemplate(e);
