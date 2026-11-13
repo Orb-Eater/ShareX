@@ -163,26 +163,38 @@ namespace ShareX.ImageEditor.Presentation.Controls
             double verticalPadding = TextPadding + strokePadding;
             double maxTextWidth = Math.Max(0, size.Width - (horizontalPadding * 2));
 
-            var formattedText = new FormattedText(
-                text,
-                CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight,
-                typeface,
-                annotation.FontSize,
-                Brushes.Black); // Avalonia requires a brush to properly construct text extents in some backends
-
-            // A word too long for a line is broken over lines, as the text box does while it is typed. The default
-            // replaced it with "…", in the saved image too.
-            formattedText.Trimming = TextTrimming.None;
-
-            if (maxTextWidth > 0)
+            FormattedText Layout(string value)
             {
-                formattedText.MaxTextWidth = maxTextWidth;
+                var layout = new FormattedText(
+                    value,
+                    CultureInfo.CurrentUICulture,
+                    FlowDirection.LeftToRight,
+                    typeface,
+                    annotation.FontSize,
+                    Brushes.Black); // Avalonia requires a brush to properly construct text extents in some backends
+
+                // A word too long for a line is broken over lines, as the text box does while it is typed. The
+                // default replaced it with "…", in the saved image too.
+                layout.Trimming = TextTrimming.None;
+
+                if (maxTextWidth > 0)
+                {
+                    layout.MaxTextWidth = maxTextWidth;
+                }
+
+                layout.TextAlignment = TextHorizontalAlignmentHelper.ToAvaloniaTextAlignment(annotation.HorizontalAlignment);
+                return layout;
             }
 
-            formattedText.TextAlignment = TextHorizontalAlignmentHelper.ToAvaloniaTextAlignment(annotation.HorizontalAlignment);
+            var formattedText = Layout(text);
 
-            double textHeight = formattedText.Height;
+            // A text that ends in a line break (Ctrl+Enter at the end) has a new, empty last line. The text box counts
+            // it: the caret goes there and the box grows by a line. FormattedText.Height does not, so the letters were
+            // centred in the box half a line lower than the text box's own lines, and the caret on the empty line sat
+            // on top of them. A space on that line counts it without drawing anything.
+            double textHeight = text.EndsWith('\n') || text.EndsWith('\r')
+                ? Layout(text + " ").Height
+                : formattedText.Height;
             double originX = horizontalPadding;
             double originY = Math.Max(verticalPadding, (size.Height - textHeight) / 2.0);
 
