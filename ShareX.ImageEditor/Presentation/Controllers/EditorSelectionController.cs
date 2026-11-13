@@ -1727,7 +1727,8 @@ public partial class EditorSelectionController
         }
         else
         {
-            var hoveredRect = GetLogicalRect(_hoveredShape);
+            // While the text is edited, the edit box's rectangle, as for the handles (review of b67317997).
+            var hoveredRect = GetSelectionRect(_hoveredShape);
             left = hoveredRect.Left;
             top = hoveredRect.Top;
             width = hoveredRect.Width;
