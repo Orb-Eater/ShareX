@@ -31,6 +31,7 @@ using ShareX.ImageEditor.Core.Annotations;
 using ShareX.ImageEditor.Presentation.Controls;
 using ShareX.ImageEditor.Presentation.Helpers;
 using ShareX.ImageEditor.Presentation.Rendering;
+using ShareX.ImageEditor.Presentation.Views;
 using SkiaSharp;
 
 namespace ShareX.ImageEditor.Presentation.Controllers;
@@ -38,6 +39,32 @@ namespace ShareX.ImageEditor.Presentation.Controllers;
 public partial class EditorSelectionController
 {
     private TextBox? _balloonTextEditor;
+
+    // The box a finished text is being edited in (ShowTextEditor), and that text's control.
+    private TextBox? _textEditorBox;
+    private OutlinedTextControl? _textEditorTarget;
+
+    /// <summary>
+    /// The rectangle the selection handles go on: the edit box while the selected text is being edited (it follows
+    /// the text as it is typed), otherwise the shape's own rectangle.
+    /// </summary>
+    private Rect GetSelectionRect(Control shape)
+    {
+        if (_textEditorBox != null && ReferenceEquals(shape, _textEditorTarget))
+        {
+            Rect editorBounds = _textEditorBox.Bounds;
+            if (editorBounds.Width > 0 && editorBounds.Height > 0)
+            {
+                return new Rect(
+                    Canvas.GetLeft(_textEditorBox) - EditorView.OverlayCanvasBleed,
+                    Canvas.GetTop(_textEditorBox) - EditorView.OverlayCanvasBleed,
+                    editorBounds.Width,
+                    editorBounds.Height);
+            }
+        }
+
+        return GetLogicalRect(shape);
+    }
 
     private void ShowSpeechBalloonTextEditor(SpeechBalloonControl balloonControl)
     {
@@ -168,11 +195,40 @@ public partial class EditorSelectionController
         // The box follows the text while it is typed, and the rectangle is fitted to it afterwards.
         annotation.SizeTextEditor(textBox);
 
+        // The text stays selected while it is edited: its handles go on the edit box and move when it grows or
+        // shrinks. Before, they stayed on the rectangle the text had when it was opened.
+        _textEditorBox = textBox;
+        _textEditorTarget = textControl;
+
+        // After the layout pass, not on the Bounds change itself: that is raised while the overlay is still arranging
+        // its children, and the handles are children of the overlay too ("Collection was modified").
+        Rect lastEditorRect = default;
+
+        void OnTextEditorLayoutUpdated(object? s, EventArgs args)
+        {
+            Rect editorRect = new(Canvas.GetLeft(textBox), Canvas.GetTop(textBox), textBox.Bounds.Width, textBox.Bounds.Height);
+            if (editorRect == lastEditorRect || !ReferenceEquals(_selectedShape, textControl))
+            {
+                return;
+            }
+
+            lastEditorRect = editorRect;
+            UpdateSelectionHandles();
+        }
+
+        textBox.LayoutUpdated += OnTextEditorLayoutUpdated;
+
         EventHandler<FocusChangedEventArgs>? lostFocusHandler = null;
 
         void CompleteEditing()
         {
             if (lostFocusHandler != null) textBox.LostFocus -= lostFocusHandler;
+            textBox.LayoutUpdated -= OnTextEditorLayoutUpdated;
+            if (ReferenceEquals(_textEditorBox, textBox))
+            {
+                _textEditorBox = null;
+                _textEditorTarget = null;
+            }
 
             // The text, and a rectangle that holds all of it: a resized one keeps its width (the lines wrap
             // inside it) and grows downwards, one that was never resized takes the text's own size.
