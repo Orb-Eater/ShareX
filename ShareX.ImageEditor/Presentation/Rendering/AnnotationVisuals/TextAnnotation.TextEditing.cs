@@ -25,7 +25,6 @@
 
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Presenters;
 using Avalonia.Media;
 using ShareX.ImageEditor.Presentation.Controls;
 using ShareX.ImageEditor.Presentation.Helpers;
@@ -38,13 +37,10 @@ public partial class TextAnnotation
     internal TextBox CreateCreationTextEditor(SolidColorBrush brush)
     {
         var textBrush = Avalonia.Media.Color.TryParse(TextColor, out var c) ? new SolidColorBrush(c) : brush;
-        var textBox = new TextBox
+        var textBox = new TextAnnotationEditorBox(this, textBrush)
         {
-            Foreground = textBrush,
-            CaretBrush = textBrush,
-            Background = CreateEditorBackground(),
             BorderThickness = new Thickness(EditorBorderThickness),
-            BorderBrush = EditorBorderBrush,
+            BorderBrush = GetEditorBorderBrush(),
             CornerRadius = new CornerRadius(Math.Max(0, CornerRadius)),
             FontSize = FontSize,
             FontFamily = new Avalonia.Media.FontFamily(FontFamily),
@@ -60,8 +56,6 @@ public partial class TextAnnotation
             MinWidth = 0,
             MinHeight = 0
         };
-
-        ApplyEditorAppearance(textBox);
 
         if (ShadowEnabled)
         {
@@ -87,39 +81,20 @@ public partial class TextAnnotation
     // Thin and neutral: it only marks the box as being typed in, and goes when the text is finished.
     private static readonly IBrush EditorBorderBrush = new SolidColorBrush(Color.FromArgb(160, 128, 128, 128));
 
-    private IBrush CreateEditorBackground()
-    {
-        return Color.TryParse(FillColor, out Color fill) && fill.A > 0 ? new SolidColorBrush(fill) : Brushes.Transparent;
-    }
+    // With a shadow the marker border would cast one too, a line the finished text does not have.
+    private IBrush GetEditorBorderBrush() => ShadowEnabled ? Brushes.Transparent : EditorBorderBrush;
+
+    /// <summary>True when the text has a box behind it: a fill colour that is not transparent.</summary>
+    internal bool HasBox => Color.TryParse(FillColor, out Color fill) && fill.A > 0;
+
+    /// <summary>True when the letters have an outline that can be seen.</summary>
+    internal bool HasVisibleOutline => StrokeWidth > 0 && Color.TryParse(StrokeColor, out Color stroke) && stroke.A > 0;
 
     // The finished text keeps this much room around it (see OutlinedTextControl); the text box border is part of it,
-    // so the text sits in the same place while it is typed as after it is finished.
+    // so the caret and the selection sit on the letters the box draws.
     private double GetEditorPadding()
     {
         return Math.Max(0, OutlinedTextControl.TextPadding + StrokeWidth - EditorBorderThickness);
-    }
-
-    // The app theme styles the parts inside a text box directly (its background and border while focused or hovered,
-    // and its text colour), which hid whatever was set on the text box: the box being typed in was always the
-    // theme's dark box with the theme's text colour, and the text then looked different once it was finished.
-    // Values set on those parts themselves win over the theme, so the box shows the annotation's own look.
-    private static void ApplyEditorAppearance(TextBox textBox)
-    {
-        textBox.TemplateApplied += (_, args) =>
-        {
-            if (args.NameScope.Find<Border>("PART_BorderElement") is { } border)
-            {
-                border.Background = textBox.Background;
-                border.BorderBrush = textBox.BorderBrush;
-                border.BorderThickness = textBox.BorderThickness;
-                border.CornerRadius = textBox.CornerRadius;
-            }
-
-            if (args.NameScope.Find<TextPresenter>("PART_TextPresenter") is { } presenter)
-            {
-                presenter.Foreground = textBox.Foreground;
-            }
-        };
     }
 
     internal TextBox CreateTextEditor()
@@ -133,14 +108,11 @@ public partial class TextAnnotation
         }
 
         var textBrush = new SolidColorBrush(Color.Parse(textColor));
-        var textBox = new TextBox
+        var textBox = new TextAnnotationEditorBox(this, textBrush)
         {
             Text = Text,
-            Foreground = textBrush,
-            CaretBrush = textBrush,
-            Background = CreateEditorBackground(),
             BorderThickness = new Thickness(EditorBorderThickness),
-            BorderBrush = EditorBorderBrush,
+            BorderBrush = GetEditorBorderBrush(),
             CornerRadius = new CornerRadius(Math.Max(0, CornerRadius)),
             FontSize = FontSize,
             FontFamily = new Avalonia.Media.FontFamily(string.IsNullOrWhiteSpace(FontFamily) ? "Segoe UI" : FontFamily),
@@ -157,7 +129,10 @@ public partial class TextAnnotation
             Tag = this
         };
 
-        ApplyEditorAppearance(textBox);
+        if (ShadowEnabled)
+        {
+            textBox.Effect = ShareX.ImageEditor.Presentation.Helpers.ShadowEffectHelper.CreateDropShadow(this);
+        }
 
         // Apply rotation to make editing match display
         if (RotationAngle != 0)
