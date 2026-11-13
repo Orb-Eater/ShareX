@@ -280,7 +280,17 @@ internal static class Program
         else
         {
             // The region capture warm-up also warms the PNG writer; without it that is done here.
-            _ = Task.Run(FastPngWriter.WarmUp);
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    FastPngWriter.WarmUp();
+                }
+                catch (Exception e)
+                {
+                    DebugHelper.WriteException(e, "PNG writer warm-up failed.");
+                }
+            });
         }
     }
 

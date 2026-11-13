@@ -534,8 +534,8 @@ public static partial class SkiaImageHelpers
 
     // The compression level setting is a zlib level for Skia's encoder. FastPngWriter packs with .NET's own
     // compressor (zlib-ng), whose level 1 is a quicker and weaker method (files about 23 % larger). One level up
-    // gives files from 9 % smaller to 2 % larger than Skia's at the same setting (measured on two screenshots at
-    // every level, see sharex-fork-work/pngbench). 0 stays "stored".
+    // gives files from 9 % smaller to 4 % larger than Skia's at the same setting (measured on three screenshots at
+    // every level; smaller at the default level 1, larger around levels 4 and 5). 0 stays "stored".
     private static int ToFastPngLevel(int zlibLevel) => zlibLevel <= 0 ? 0 : Math.Min(9, zlibLevel + 1);
 
     // Returns false when the encoded PNG exceeds the limit, so callers can discard it without encoding the remaining rows.

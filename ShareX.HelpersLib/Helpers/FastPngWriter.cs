@@ -121,9 +121,15 @@ public static unsafe class FastPngWriter
             }
 
             Action work = Work;
-            for (int i = 1; i < bandCount; i++) ThreadPool.UnsafeQueueUserWorkItem(static state => state(), work, preferLocal: false);
-            Work();
-            done.Wait();
+            try
+            {
+                for (int i = 1; i < bandCount; i++) ThreadPool.UnsafeQueueUserWorkItem(static state => state(), work, preferLocal: false);
+            }
+            finally
+            {
+                Work();      // takes every band no helper has, so the wait below always ends
+                done.Wait(); // no helper is inside a band after this, also when queueing failed part way
+            }
 
             if (failure != null)
             {
