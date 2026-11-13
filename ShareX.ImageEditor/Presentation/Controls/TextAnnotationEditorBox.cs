@@ -69,6 +69,61 @@ namespace ShareX.ImageEditor.Presentation.Controls
             SelectionForegroundBrush = Brushes.Transparent;
         }
 
+        // The box grows from the point its text's alignment holds (TextAnnotation.SetSizeAnchored), not from its top
+        // left corner, while it has no set width (a new text, or a finished one that was never resized).
+        private bool _followAnchor;
+
+        // From the annotation's coordinates to those of the canvas the box is on (the overlay is offset by its bleed).
+        private Vector? _parentOffset;
+
+        internal void FollowAnchor() => _followAnchor = true;
+
+        // The box is placed here, in its own measure, from the size it is about to take: the canvas arranges it in
+        // the same layout pass, so the box never shows a frame at the old place with the new size.
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            Size size = base.MeasureOverride(availableSize);
+
+            if (_followAnchor && double.IsNaN(Width))
+            {
+                PlaceAtAnchor(size);
+            }
+
+            return size;
+        }
+
+        private void PlaceAtAnchor(Size size)
+        {
+            double left = Canvas.GetLeft(this), top = Canvas.GetTop(this);
+            if (double.IsNaN(left) || double.IsNaN(top))
+            {
+                return;
+            }
+
+            // The annotation keeps the rectangle the text had when the box was opened (a new text: its click point)
+            // until the text is finished, and is then fitted from that same rectangle, to the same place.
+            SkiaSharp.SKRect from = _annotation.GetStoredBounds();
+            _parentOffset ??= new Vector(left - from.Left, top - from.Top);
+
+            if (UseLayoutRounding)
+            {
+                size = Avalonia.Layout.LayoutHelper.RoundLayoutSizeUp(size, Avalonia.Layout.LayoutHelper.GetLayoutScale(this));
+            }
+
+            Point topLeft = TextAnnotation.GetAnchoredTopLeft(from, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle)
+                + _parentOffset.Value;
+
+            if (Math.Abs(topLeft.X - left) > 0.001)
+            {
+                Canvas.SetLeft(this, topLeft.X);
+            }
+
+            if (Math.Abs(topLeft.Y - top) > 0.001)
+            {
+                Canvas.SetTop(this, topLeft.Y);
+            }
+        }
+
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
         {
             base.OnApplyTemplate(e);

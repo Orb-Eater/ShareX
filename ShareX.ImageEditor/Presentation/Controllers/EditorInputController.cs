@@ -1665,9 +1665,10 @@ public class EditorInputController
                             var desiredWidth = control.DesiredSize.Width > 0 ? control.DesiredSize.Width : tb.Bounds.Width;
                             var desiredHeight = control.DesiredSize.Height > 0 ? control.DesiredSize.Height : tb.Bounds.Height;
 
-                            // From the control's own corner (UpdateVisualControl put it at the annotation's), stored
-                            // so that the size is never a hair over: see TextAnnotation.SetSize.
-                            annotation.SetSize(desiredWidth, desiredHeight);
+                            // Keeping still the point its alignment holds, as the text box did (SetCreatedText already
+                            // gave it this size; this only changes it if the control measures otherwise), stored so
+                            // that the size is never a hair over: see TextAnnotation.SetSize.
+                            annotation.SetSizeAnchored(desiredWidth, desiredHeight);
 
                             AnnotationVisualFactory.UpdateVisualControl(
                                 control,
