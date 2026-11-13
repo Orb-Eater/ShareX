@@ -194,10 +194,7 @@ public partial class EditorSelectionController
         Canvas.SetTop(textBox, ToOverlayCoordinate(annotationBounds.Top));
         // The box follows the text while it is typed, and the rectangle is fitted to it afterwards.
         annotation.SizeTextEditor(textBox);
-        if (textBox is TextAnnotationEditorBox anchoredBox)
-        {
-            anchoredBox.UseImageWidth(() => _view?.EditorCore?.CanvasSize.Width ?? double.PositiveInfinity);
-        }
+        _view.KeepInsideImage(textBox);
 
         // The text stays selected while it is edited: its handles go on the edit box and move when it grows or
         // shrinks. Before, they stayed on the rectangle the text had when it was opened.

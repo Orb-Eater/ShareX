@@ -76,32 +76,34 @@ namespace ShareX.ImageEditor.Presentation.Controls
         // From the annotation's coordinates to those of the canvas the box is on (the overlay is offset by its bleed).
         private Vector? _parentOffset;
 
-        // Image width in annotation pixels, read while the box is open. Captured on the first measure so a live
-        // canvas growth to the right does not move a box that was already stopped at an edge.
+        // The image's width in annotation pixels. Read once, on the first measure, and kept as the range the box
+        // stays inside (TextAnnotation.GetAnchorLimits): a live canvas growth to the right while typing must not
+        // move a box that was already stopped at an edge.
         private Func<double>? _imageWidth;
-        private double? _anchorLimitWidth;
+        private TextAnnotation.AnchorLimits _limits;
 
         internal void FollowAnchor() => _followAnchor = true;
 
-        internal void UseImageWidth(Func<double> imageWidth) => _imageWidth = imageWidth;
+        internal void KeepInsideImage(Func<double> imageWidth) => _imageWidth = imageWidth;
 
-        /// <summary>The image width this box is kept inside, or positive infinity when it is not limited.</summary>
-        internal double AnchorLimitWidth => _anchorLimitWidth ?? double.PositiveInfinity;
-
-        private double CurrentAnchorLimit()
+        /// <summary>The range this box is kept inside; not limited when it was never told the image's width.</summary>
+        internal TextAnnotation.AnchorLimits Limits
         {
-            if (_anchorLimitWidth is double captured)
+            get
             {
-                return captured;
-            }
+                if (!_limits.Limited && _imageWidth != null)
+                {
+                    _limits = _annotation.GetAnchorLimits(_imageWidth());
+                }
 
-            double live = _imageWidth?.Invoke() ?? double.PositiveInfinity;
-            if (live > 1 && !double.IsInfinity(live))
-            {
-                _anchorLimitWidth = live;
+                return _limits;
             }
+        }
 
-            return _anchorLimitWidth ?? double.PositiveInfinity;
+        /// <summary>The range the box a text was typed in was kept inside, for fitting the finished text.</summary>
+        internal static TextAnnotation.AnchorLimits LimitsOf(TextBox textBox)
+        {
+            return textBox is TextAnnotationEditorBox editor ? editor.Limits : default;
         }
 
         // The box is placed here, in its own measure, from the size it is about to take: the canvas arranges it in
@@ -137,7 +139,7 @@ namespace ShareX.ImageEditor.Presentation.Controls
             }
 
             Point anchored = TextAnnotation.GetAnchoredTopLeft(from, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle);
-            double x = TextAnnotation.ClampAnchoredLeft(anchored.X, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle, CurrentAnchorLimit());
+            double x = TextAnnotation.ClampAnchoredLeft(anchored.X, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle, Limits);
             Point topLeft = new Point(x, anchored.Y) + _parentOffset.Value;
 
             if (Math.Abs(topLeft.X - left) > 0.001)
