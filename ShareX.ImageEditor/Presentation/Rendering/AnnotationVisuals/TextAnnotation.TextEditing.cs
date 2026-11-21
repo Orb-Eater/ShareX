@@ -79,7 +79,15 @@ public partial class TextAnnotation
         // stored as floats could lay out one pixel off the box the text was typed in. The rectangle is the click
         // point until now; it grows from there as the text box did (SetSizeAnchored), inside the range that box was
         // kept inside while typing, so finishing lands on that same box.
-        SetSizeAnchored(Math.Ceiling(width), Math.Ceiling(height), TextAnnotationEditorBox.LimitsOf(textBox));
+        SetSizeAnchored(WholeWidth(width), Math.Ceiling(height), TextAnnotationEditorBox.LimitsOf(textBox));
+    }
+
+    // Whole pixels. A centred text is kept an even number of them wide, as the box it is typed in is
+    // (TextAnnotationEditorBox.GrowthSize): it grows from its middle, and an odd width put its edges on half pixels.
+    private double WholeWidth(double width)
+    {
+        double whole = Math.Ceiling(width);
+        return HorizontalAlignment == TextHorizontalAlignment.Center && whole % 2 != 0 ? whole + 1 : whole;
     }
 
     // A rectangle within this of the text's own size counts as never resized (sizes are stored as floats and
@@ -95,8 +103,10 @@ public partial class TextAnnotation
     private bool HasNaturalBounds(Size naturalSize)
     {
         SKRect bounds = GetBounds();
+        // A centred text is stored up to a pixel wider than its whole width (WholeWidth): near either size counts.
         return naturalSize.Width > 0 &&
-            Math.Abs(bounds.Width - naturalSize.Width) <= NaturalSizeTolerance &&
+            (Math.Abs(bounds.Width - naturalSize.Width) <= NaturalSizeTolerance ||
+             Math.Abs(bounds.Width - WholeWidth(naturalSize.Width)) <= NaturalSizeTolerance) &&
             Math.Abs(bounds.Height - naturalSize.Height) <= NaturalSizeTolerance;
     }
 
@@ -188,7 +198,7 @@ public partial class TextAnnotation
     {
         if (size.Width > 0 && size.Height > 0)
         {
-            SetSizeAnchored(Math.Ceiling(size.Width), Math.Ceiling(size.Height), limits);
+            SetSizeAnchored(WholeWidth(size.Width), Math.Ceiling(size.Height), limits);
         }
     }
 
