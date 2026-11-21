@@ -114,7 +114,31 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
             if (_followAnchor && double.IsNaN(Width))
             {
+                size = GrowthSize(size);
                 PlaceAtAnchor(size);
+            }
+
+            return size;
+        }
+
+        // The size the growing box takes, in whole layout pixels as layout rounds it. A centred box is also kept an
+        // even number of them wide. It grows from its middle, so an odd width put its left edge on half a pixel, and
+        // layout rounding took that to the even pixel: down on one key, up on the next, so the letters stepped about
+        // half a pixel back and forth as they moved left. TextAnnotation gives the finished text the same width.
+        private Size GrowthSize(Size size)
+        {
+            if (!UseLayoutRounding)
+            {
+                return size;
+            }
+
+            double scale = Avalonia.Layout.LayoutHelper.GetLayoutScale(this);
+            size = Avalonia.Layout.LayoutHelper.RoundLayoutSizeUp(size, scale);
+
+            double pixels = Math.Round(size.Width * scale);
+            if (_annotation.HorizontalAlignment == TextHorizontalAlignment.Center && pixels % 2 != 0)
+            {
+                size = size.WithWidth((pixels + 1) / scale);
             }
 
             return size;
@@ -132,11 +156,6 @@ namespace ShareX.ImageEditor.Presentation.Controls
             // until the text is finished, and is then fitted from that same rectangle, to the same place.
             SkiaSharp.SKRect from = _annotation.GetStoredBounds();
             _parentOffset ??= new Vector(left - from.Left, top - from.Top);
-
-            if (UseLayoutRounding)
-            {
-                size = Avalonia.Layout.LayoutHelper.RoundLayoutSizeUp(size, Avalonia.Layout.LayoutHelper.GetLayoutScale(this));
-            }
 
             Point anchored = TextAnnotation.GetAnchoredTopLeft(from, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle);
             double x = TextAnnotation.ClampAnchoredLeft(anchored.X, size.Width, size.Height, _annotation.HorizontalAlignment, _annotation.RotationAngle, Limits);
@@ -178,6 +197,43 @@ namespace ShareX.ImageEditor.Presentation.Controls
             _annotation.SetStoredRect(left - offset.X, top - offset.Y, width, height);
         }
 
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            Size arranged = base.ArrangeOverride(finalSize);
+            AlignHiddenLetters(finalSize.Width);
+            return arranged;
+        }
+
+        // The text box's own letters are hidden, but its caret and selection sit on them. A centred line that ends
+        // in spaces is drawn centred with them (OutlinedTextControl.CentreWithTrailingSpaces); the text box centres
+        // it on its letters only, so its letters are moved by the same amount, in the same room the drawn ones get.
+        private void AlignHiddenLetters(double boxWidth)
+        {
+            if (_presenter == null)
+            {
+                return;
+            }
+
+            double shift = 0;
+            if (_annotation.HorizontalAlignment == TextHorizontalAlignment.Center && _presenter.TextLayout.TextLines is { Count: 1 } lines)
+            {
+                double room = boxWidth - ((OutlinedTextControl.TextPadding + _annotation.StrokeWidth) * 2);
+                shift = OutlinedTextControl.CentreWithTrailingSpaces(lines[0].Width, lines[0].WidthIncludingTrailingWhitespace, room);
+            }
+
+            if (_presenter.RenderTransform is TranslateTransform moved)
+            {
+                if (moved.X != shift)
+                {
+                    moved.X = shift;
+                }
+            }
+            else if (shift != 0)
+            {
+                _presenter.RenderTransform = new TranslateTransform(shift, 0);
+            }
+        }
+
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
         {
             base.OnApplyTemplate(e);
@@ -201,6 +257,10 @@ namespace ShareX.ImageEditor.Presentation.Controls
             if (_presenter != null)
             {
                 _presenter.Foreground = Brushes.Transparent;
+                // The hidden letters are laid out across the whole room, as the drawn ones are (DrawText aligns them in
+                // the box less its padding). A narrower presenter was centred in that room instead, and on a centred
+                // box one pixel wider than its letters (GrowthSize) layout rounding put it half a pixel off them.
+                _presenter.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
                 _presenter.PropertyChanged += OnPresenterPropertyChanged;
             }
 
@@ -243,9 +303,16 @@ namespace ShareX.ImageEditor.Presentation.Controls
         {
             base.OnPropertyChanged(change);
 
-            if (change.Property == TextProperty || change.Property == BoundsProperty)
+            if (change.Property == TextProperty || change.Property == BoundsProperty || change.Property == TextAlignmentProperty)
             {
                 InvalidateVisual();
+            }
+
+            // The hidden letters' shift (AlignHiddenLetters) is set in arrange, which a text or alignment change that
+            // keeps the box's size does not run by itself: the caret then sat off the drawn letters until the next key.
+            if (change.Property == TextProperty || change.Property == TextAlignmentProperty)
+            {
+                InvalidateArrange();
             }
         }
 

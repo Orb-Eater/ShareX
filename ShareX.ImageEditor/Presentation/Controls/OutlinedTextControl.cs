@@ -201,6 +201,13 @@ namespace ShareX.ImageEditor.Presentation.Controls
                 ? Layout(text + " ").Height
                 : formattedText.Height;
             double originX = horizontalPadding;
+            if (annotation.HorizontalAlignment == TextHorizontalAlignment.Center &&
+                formattedText.WidthIncludingTrailingWhitespace > formattedText.Width && !HasLineBreak(text))
+            {
+                // Measured unbroken: the line counts only when all of it, spaces too, fits without wrapping.
+                var line = new FormattedText(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, typeface, annotation.FontSize, glyphBrush);
+                originX += CentreWithTrailingSpaces(line.Width, line.WidthIncludingTrailingWhitespace, maxTextWidth);
+            }
             double originY = Math.Max(verticalPadding, (size.Height - textHeight) / 2.0);
 
             originY = Math.Min(originY, Math.Max(verticalPadding, size.Height - textHeight - verticalPadding));
@@ -240,9 +247,31 @@ namespace ShareX.ImageEditor.Presentation.Controls
         // Every character the text layout ends a line on: line feed, carriage return, next line (U+0085), line and
         // paragraph separator (U+2028, U+2029), vertical tab and form feed. Typing only gives the first; the rest can
         // come in by paste (review of 389f3460a).
-        private static bool EndsWithLineBreak(string text)
+        private static bool IsLineBreak(char c) => c is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029' or '\v' or '\f';
+
+        private static bool EndsWithLineBreak(string text) => text.Length > 0 && IsLineBreak(text[^1]);
+
+        private static bool HasLineBreak(string text)
         {
-            return text.Length > 0 && text[^1] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029' or '\v' or '\f';
+            foreach (char c in text)
+            {
+                if (IsLineBreak(c)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// How far to move a centred line that ends in spaces so it is centred with them. The text layout centres a
+        /// line on its letters only, but the box is as wide as the line with its spaces (MeasureNaturalSize, and the
+        /// text box's own width while it is typed). So a typed space grew the box from its middle while the letters
+        /// stayed put, and the next letter then moved them by a space and a half. Only for one line that fits the room
+        /// with its spaces; several lines, or a line that wraps, are left as the layout puts them. The text box moves
+        /// its own letters, caret and selection the same way (TextAnnotationEditorBox).
+        /// </summary>
+        internal static double CentreWithTrailingSpaces(double width, double widthWithSpaces, double room)
+        {
+            return widthWithSpaces > width && widthWithSpaces <= room ? -(widthWithSpaces - width) / 2 : 0;
         }
 
         protected override Size MeasureOverride(Size availableSize)
