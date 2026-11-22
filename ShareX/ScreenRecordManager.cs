@@ -202,6 +202,7 @@ namespace ShareX
                     if (!record)
                     {
                         IsRecording = false;
+                        IdleMemoryRelease.Schedule();
                         return;
                     }
                     captureRectangle = configurationBar.RecordingRegion;
@@ -211,6 +212,7 @@ namespace ShareX
                 catch (Exception ex)
                 {
                     IsRecording = false;
+                    IdleMemoryRelease.Schedule();
                     DebugHelper.WriteException(ex);
                     MessageBox.Show(ex.Message, "ShareX", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
@@ -472,6 +474,7 @@ namespace ShareX
                 {
                     abortRequested = false;
                     IsRecording = false;
+                    IdleMemoryRelease.Schedule(); // aborted or failed: no task follows to schedule one
                 }
             });
         }

@@ -56,6 +56,16 @@ public static unsafe class FastPngWriter
     private static readonly byte[] Signature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
     private static readonly uint[] CrcTable = MakeCrcTable();
 
+    // The bands' buffers come from a pool of the writer's own, which ReleaseBuffers drops. The shared pool keeps
+    // what a save returned until a later full collection finds it unused for a minute, and a ShareX that has gone
+    // idle runs no further collection, so up to a picture's worth per save stayed committed for good.
+    private static ArrayPool<byte> pool = NewPool();
+
+    private static ArrayPool<byte> NewPool() => ArrayPool<byte>.Create(maxArrayLength: 1 << 24, maxArraysPerBucket: 64);
+
+    /// <summary>Lets the buffers of earlier saves go; a save still running keeps the pool it started with.</summary>
+    public static void ReleaseBuffers() => Volatile.Write(ref pool, NewPool());
+
     /// <summary>
     /// Writes one small picture to nowhere, so the writer is compiled before the first capture needs it.
     /// Without it the first save after a start takes several times as long as the later ones.
@@ -89,10 +99,11 @@ public static unsafe class FastPngWriter
         int bandCount = (int)Math.Clamp(rawSize / MinBandBytes, 1, Math.Min(wanted, height));
         if (bands > 0) bandCount = Math.Min(bands, height);
 
+        ArrayPool<byte> buffers = Volatile.Read(ref pool);
         Band[] results = new Band[bandCount];
         if (bandCount == 1)
         {
-            results[0] = EncodeBand(pixels, rowBytes, width, bpp, 0, height, blueFirst, filter, level, strategy, true);
+            results[0] = EncodeBand(buffers, pixels, rowBytes, width, bpp, 0, height, blueFirst, filter, level, strategy, true);
         }
         else
         {
@@ -112,7 +123,7 @@ public static unsafe class FastPngWriter
                     try
                     {
                         int first = (int)((long)height * index / bandCount), end = (int)((long)height * (index + 1) / bandCount);
-                        results[index] = EncodeBand(pixels, rowBytes, width, bpp, first, end, blueFirst, filter, level, strategy, index == bandCount - 1);
+                        results[index] = EncodeBand(buffers, pixels, rowBytes, width, bpp, first, end, blueFirst, filter, level, strategy, index == bandCount - 1);
                     }
                     catch (Exception e)
                     {
@@ -138,7 +149,7 @@ public static unsafe class FastPngWriter
             {
                 foreach (Band band in results)
                 {
-                    if (band.Data != null) ArrayPool<byte>.Shared.Return(band.Data);
+                    if (band.Data != null) buffers.Return(band.Data);
                 }
 
                 ExceptionDispatchInfo.Throw(failure);
@@ -150,7 +161,7 @@ public static unsafe class FastPngWriter
         foreach (Band band in results) fileSize += 12 + band.Length;
         if (fileSize > sizeLimit)
         {
-            foreach (Band band in results) ArrayPool<byte>.Shared.Return(band.Data);
+            foreach (Band band in results) buffers.Return(band.Data);
             return false;
         }
 
@@ -173,7 +184,7 @@ public static unsafe class FastPngWriter
             bool last = i == bandCount - 1;
             if (last) BinaryPrimitives.WriteUInt32BigEndian(trailer, adler);
             WriteChunk(output, "IDAT"u8, i == 0 ? zlibHeader : default, new ReadOnlySpan<byte>(band.Data, 0, band.Length), last ? trailer : default);
-            ArrayPool<byte>.Shared.Return(band.Data);
+            buffers.Return(band.Data);
         }
 
         WriteChunk(output, "IEND"u8, default, default);
@@ -190,16 +201,16 @@ public static unsafe class FastPngWriter
 
     // Compiled fully optimised at the first call: a capture is rare, so the code would otherwise run unoptimised.
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    private static Band EncodeBand(byte* pixels, int rowBytes, int width, int bpp, int firstRow, int endRow, bool blueFirst,
+    private static Band EncodeBand(ArrayPool<byte> buffers, byte* pixels, int rowBytes, int width, int bpp, int firstRow, int endRow, bool blueFirst,
         FastPngFilter filter, int level, ZLibCompressionStrategy strategy, bool last)
     {
         int stride = width * bpp;
         int line = stride + 1;
         // Rows carry bpp zero bytes in front, so "the pixel to the left" of the first pixel reads as zero.
-        byte[] rowsBuffer = ArrayPool<byte>.Shared.Rent(2 * (bpp + stride + Slack));
-        byte[] workBuffer = ArrayPool<byte>.Shared.Rent(5 * (stride + Slack));
+        byte[] rowsBuffer = buffers.Rent(2 * (bpp + stride + Slack));
+        byte[] workBuffer = buffers.Rent(5 * (stride + Slack));
         const int chunkRows = 32;
-        byte[] chunk = ArrayPool<byte>.Shared.Rent(chunkRows * line);
+        byte[] chunk = buffers.Rent(chunkRows * line);
         MemoryStream compressed = new(Math.Max(4096, (int)Math.Min(int.MaxValue / 2, (long)line * (endRow - firstRow) / 4)));
         uint adlerA = 1, adlerB = 0;
         long rawLength = 0;
@@ -249,10 +260,10 @@ public static unsafe class FastPngWriter
             }
         }
 
-        ArrayPool<byte>.Shared.Return(rowsBuffer);
-        ArrayPool<byte>.Shared.Return(workBuffer);
-        ArrayPool<byte>.Shared.Return(chunk);
-        byte[] data = ArrayPool<byte>.Shared.Rent(length);
+        buffers.Return(rowsBuffer);
+        buffers.Return(workBuffer);
+        buffers.Return(chunk);
+        byte[] data = buffers.Rent(length);
         compressed.GetBuffer().AsSpan(0, length).CopyTo(data);
         return new Band { Data = data, Length = length, Adler = (adlerB << 16) | adlerA, RawLength = rawLength };
     }

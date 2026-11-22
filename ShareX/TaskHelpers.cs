@@ -78,6 +78,7 @@ namespace ShareX
         {
             if (job == HotkeyType.None) return;
 
+            WarmUpMemoryRelease.Wake();
             DebugHelper.WriteLine("Executing: " + job.GetLocalizedDescription());
 
             TaskSettings safeTaskSettings = TaskSettings.GetSafeTaskSettings(taskSettings);

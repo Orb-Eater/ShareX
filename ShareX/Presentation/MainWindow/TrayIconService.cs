@@ -104,12 +104,14 @@ internal sealed class DesktopTrayIconService : ITrayIconService
 
     private void OnMouseDown(InputMouseButton button)
     {
+        WarmUpMemoryRelease.Wake();
         if (button == InputMouseButton.Right) RightButtonDown?.Invoke();
     }
     private void OnAvaloniaClick(object? sender, EventArgs e) => OnMouseUp(InputMouseButton.Left);
 
     private async void OnMouseUp(InputMouseButton button)
     {
+        WarmUpMemoryRelease.Wake();
         switch (button)
         {
             case InputMouseButton.Left:

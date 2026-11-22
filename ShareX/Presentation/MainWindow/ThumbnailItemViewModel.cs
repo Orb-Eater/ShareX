@@ -400,8 +400,17 @@ internal sealed class ThumbnailItemViewModel : INotifyPropertyChanged, IDisposab
 
             if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath) && FileHelpers.IsImageFile(filePath))
             {
-                using FileStream stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                return Bitmap.DecodeToWidth(stream, width, BitmapInterpolationMode.HighQuality);
+                // Skia reads the file itself. Through a .NET stream it reads it into buffers as big as the file, rented
+                // from the shared pool, and the pool keeps them for good once ShareX goes idle: about 15 MB per
+                // full-desktop capture (measured 2026-11-20). JPEG and WebP decode straight at a reduced size.
+                using SkiaSharp.SKCodec? codec = SkiaSharp.SKCodec.Create(filePath);
+                if (codec == null) return null;
+                SkiaSharp.SKImageInfo info = codec.Info;
+                SkiaSharp.SKSizeI size = codec.GetScaledDimensions(Math.Min(1f, (float)width / info.Width));
+                using DrawingBitmap? decoded = DrawingBitmap.Decode(codec, new SkiaSharp.SKImageInfo(size.Width, size.Height,
+                    SkiaSharp.SKColorType.Bgra8888,
+                    info.AlphaType == SkiaSharp.SKAlphaType.Opaque ? SkiaSharp.SKAlphaType.Opaque : SkiaSharp.SKAlphaType.Premul));
+                return decoded == null ? null : BitmapConversionHelpers.CreatePreview(decoded, new Avalonia.PixelSize(width, int.MaxValue));
             }
 
             if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath) && FileHelpers.IsVideoFile(filePath))

@@ -131,6 +131,8 @@ namespace ShareX
                     MainWindowIntegration.Activate();
                 }
 
+                // A cancelled capture never starts a task, and its overlay's GPU surfaces stay until the next frame.
+                IdleMemoryRelease.Schedule();
                 AfterCapture(metadata, taskSettings);
             }
         }

@@ -111,6 +111,7 @@ namespace ShareX
 
                 for (int i = 0; i < len; i++)
                 {
+                    IdleMemoryRelease.Schedule();
                     inQueueTasks[i].Start();
                 }
             }
@@ -308,6 +309,11 @@ namespace ShareX
                     if (ApplicationState.Settings.SaveSettingsAfterTaskCompleted && !IsBusy)
                     {
                         SettingManager.SaveAllSettingsAsync();
+                    }
+
+                    if (!IsBusy)
+                    {
+                        IdleMemoryRelease.Schedule();
                     }
                 }
             }

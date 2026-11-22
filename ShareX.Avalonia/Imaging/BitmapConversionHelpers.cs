@@ -56,7 +56,9 @@ namespace ShareX.AvaloniaUI.Imaging
             using SKBitmap resized = source.Resize(
                 new SKImageInfo(width, height, SKColorType.Bgra8888,
                     source.AlphaType == SKAlphaType.Opaque ? SKAlphaType.Opaque : SKAlphaType.Premul),
-                new SKSamplingOptions(SKCubicResampler.Mitchell)) ??
+                // Only ever shrinks: linear with mipmaps, as Avalonia uses for shrinking. A cubic filter reads only
+                // 4x4 source pixels per output pixel, and a 4K capture shrunk 19x into a thumbnail turns to jagged stripes.
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)) ??
                 throw new InvalidOperationException("Unable to resize the image preview.");
             return ToAvaloniBitmap(resized);
         }

@@ -91,6 +91,7 @@ internal sealed class MainForm
 
     private async void HandleHotkeys(HotkeySettings hotkeySetting)
     {
+        WarmUpMemoryRelease.Wake();
         DebugHelper.WriteLine("Hotkey triggered. " + hotkeySetting);
         await TaskHelpers.ExecuteJob(hotkeySetting.TaskSettings);
     }

@@ -83,6 +83,7 @@ internal static class SingleInstanceCommandRouter
 
     internal static void ArgumentsReceived(string[] arguments)
     {
+        WarmUpMemoryRelease.Wake();
         string formattedArguments = arguments == null ? "null" : $"\"{string.Join(" ", arguments)}\"";
         DebugHelper.WriteLine("Arguments received: " + formattedArguments);
         _ = DispatchWhenReadyAsync(arguments);

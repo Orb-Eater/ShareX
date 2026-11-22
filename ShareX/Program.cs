@@ -232,6 +232,7 @@ internal static class Program
         ConnectImageEditorLog();
         EditorServices.Clipboard ??= new EditorClipboard();
         ImageEditorIntegration.Initialize();
+        IdleMemoryRelease.Initialize();
 
         if (ApplicationState.Settings.ShowStartScreen)
         {
@@ -313,7 +314,7 @@ internal static class Program
 
             // Let the spare window (posted at Background priority) be built first.
             await Task.Delay(500);
-            await WarmUpMemoryRelease.RunAsync();
+            IdleMemoryRelease.Schedule();
         }
         catch (Exception e)
         {
