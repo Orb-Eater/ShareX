@@ -162,6 +162,11 @@ namespace ShareX.ImageEditor.Presentation.Controls
             double horizontalPadding = TextPadding + strokePadding;
             double verticalPadding = TextPadding + strokePadding;
             double maxTextWidth = Math.Max(0, size.Width - (horizontalPadding * 2));
+            Color textColor = string.IsNullOrEmpty(annotation.TextColor) ? default : Color.Parse(annotation.TextColor);
+            bool hasOutline = annotation.HasVisibleOutline;
+            if (textColor.A == 0 && !hasOutline) return;
+            IBrush glyphBrush = textColor.A == 0 ? Brushes.Black :
+                new SolidColorBrush(Color.FromRgb(textColor.R, textColor.G, textColor.B));
 
             FormattedText Layout(string value)
             {
@@ -171,7 +176,7 @@ namespace ShareX.ImageEditor.Presentation.Controls
                     FlowDirection.LeftToRight,
                     typeface,
                     annotation.FontSize,
-                    Brushes.Black); // Avalonia requires a brush to properly construct text extents in some backends
+                    glyphBrush);
 
                 // A word too long for a line is broken over lines, as the text box does while it is typed. The
                 // default replaced it with "…", in the saved image too.
@@ -200,22 +205,9 @@ namespace ShareX.ImageEditor.Presentation.Controls
 
             originY = Math.Min(originY, Math.Max(verticalPadding, size.Height - textHeight - verticalPadding));
 
-            var textGeometry = formattedText.BuildGeometry(new Point(originX - scroll.X, originY - scroll.Y));
-            if (textGeometry == null) return;
-
-            // Text color is TextColor, outline color is StrokeColor. A transparent one is not drawn.
-            IBrush? fillBrush = null;
-            if (!string.IsNullOrEmpty(annotation.TextColor))
-            {
-                var textColor = Color.Parse(annotation.TextColor);
-                if (textColor.A > 0)
-                {
-                    fillBrush = new SolidColorBrush(textColor);
-                }
-            }
-
+            var origin = new Point(originX - scroll.X, originY - scroll.Y);
             IPen? strokePen = null;
-            if (annotation.HasVisibleOutline)
+            if (hasOutline)
             {
                 strokePen = new Pen(new SolidColorBrush(Color.Parse(annotation.StrokeColor)), annotation.StrokeWidth, lineJoin: PenLineJoin.Round);
             }
@@ -223,15 +215,24 @@ namespace ShareX.ImageEditor.Presentation.Controls
             // Letters that do not fit a shrunk annotation are cut at its edge.
             using (context.PushClip(new Rect(size)))
             {
-                // The outline first, so the letters are drawn on top of it.
+                // The outline first, then the original shaped layout so fallback glyphs retain their baselines.
                 if (strokePen != null)
                 {
-                    context.DrawGeometry(null, strokePen, textGeometry);
+                    // Colour glyphs may have no vector outline; geometry is only used for the stroke.
+                    var textGeometry = formattedText.BuildGeometry(origin);
+                    if (textGeometry != null) context.DrawGeometry(null, strokePen, textGeometry);
                 }
 
-                if (fillBrush != null)
+                if (textColor.A > 0)
                 {
-                    context.DrawGeometry(fillBrush, null, textGeometry);
+                    // Fade the whole fill once: colour-font palettes need opacity as well as the text brush.
+                    // Greyscale smoothing: the default subpixel smoothing left coloured fringes on the letters in the
+                    // saved image. Colour emoji keep their colours.
+                    using (context.PushRenderOptions(new RenderOptions { TextRenderingMode = TextRenderingMode.Antialias }))
+                    using (context.PushOpacity(textColor.A / 255.0))
+                    {
+                        context.DrawText(formattedText, origin);
+                    }
                 }
             }
         }

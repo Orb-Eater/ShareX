@@ -90,9 +90,10 @@ public partial class TextAnnotation
     /// True when the rectangle is still the size the text itself takes, as it is after typing a new text. False
     /// once it has been dragged to another size.
     /// </summary>
-    internal bool HasNaturalSize()
+    internal bool HasNaturalSize() => HasNaturalBounds(OutlinedTextControl.MeasureNaturalSize(this));
+
+    private bool HasNaturalBounds(Size naturalSize)
     {
-        Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
         SKRect bounds = GetBounds();
         return naturalSize.Width > 0 &&
             Math.Abs(bounds.Width - naturalSize.Width) <= NaturalSizeTolerance &&
@@ -145,17 +146,20 @@ public partial class TextAnnotation
     internal bool ChangeStyle(Action change, double imageWidth = double.PositiveInfinity)
     {
         Size before = OutlinedTextControl.MeasureNaturalSize(this);
-        bool natural = HasNaturalSize();
-        AnchorLimits limits = GetAnchorLimits(imageWidth);
+        bool natural = HasNaturalBounds(before);
+        // A restyle may grow a text that already sticks out. Typing must not: that limit is the installed one.
+        AnchorLimits limits = GetAnchorLimits(imageWidth, allowStuckOut: true);
         change();
 
         // Picking a text sets its own values again; that is no change and must not move anything.
-        if (!natural || OutlinedTextControl.MeasureNaturalSize(this) == before)
+        if (!natural)
         {
             return false;
         }
 
-        FitToText(free: true, limits);
+        Size after = OutlinedTextControl.MeasureNaturalSize(this);
+        if (after == before) return false;
+        FitNaturalSize(after, limits);
         return true;
     }
 
@@ -168,11 +172,7 @@ public partial class TextAnnotation
 
         if (free)
         {
-            Size naturalSize = OutlinedTextControl.MeasureNaturalSize(this);
-            if (naturalSize.Width > 0 && naturalSize.Height > 0) // no text left: the rectangle stays
-            {
-                SetSizeAnchored(Math.Ceiling(naturalSize.Width), Math.Ceiling(naturalSize.Height), limits);
-            }
+            FitNaturalSize(OutlinedTextControl.MeasureNaturalSize(this), limits);
         }
         else
         {
@@ -181,6 +181,14 @@ public partial class TextAnnotation
             {
                 SetSize(bounds.Width, needed);
             }
+        }
+    }
+
+    private void FitNaturalSize(Size size, AnchorLimits limits)
+    {
+        if (size.Width > 0 && size.Height > 0)
+        {
+            SetSizeAnchored(Math.Ceiling(size.Width), Math.Ceiling(size.Height), limits);
         }
     }
 
@@ -218,14 +226,15 @@ public partial class TextAnnotation
     }
 
     /// <summary>
-    /// The range for this text in an image of the given width, from the rectangle it has now, before it is typed in
-    /// or restyled: the image. A side the rectangle already sticks out of is not limited: that text is outside on
-    /// purpose, so opening or restyling it must not pull it in, and it grows and shrinks around the point its
-    /// alignment holds there, both ways the same (a limit at its present edge made it move inwards when it grew, so
-    /// bold off and on again did not come back). Out by no more than the canvas growth tolerates counts as rounding:
-    /// that side is limited at where the rectangle is, so it does not move either. Not limited without a real width.
+    /// The range for this text in an image of the given width, from the rectangle it has now. Typing uses the
+    /// bounded range (the installed rule): a side stops at the image, or at where the rectangle already is when
+    /// that is further out, so a new click just outside the picture grows into the picture and a finished text
+    /// is not pulled in. A restyle passes <paramref name="allowStuckOut"/>: a side already out by more than the
+    /// canvas-growth tolerance is not limited, so bold or size there and back keeps the alignment point (a limit
+    /// at the present edge moved the box inwards as it grew). Within that tolerance the side stays bounded, or a
+    /// new click would again hide letters while they are typed. Not limited without a real width.
     /// </summary>
-    internal AnchorLimits GetAnchorLimits(double imageWidth)
+    internal AnchorLimits GetAnchorLimits(double imageWidth, bool allowStuckOut = false)
     {
         if (!(imageWidth > 0) || double.IsInfinity(imageWidth))
         {
@@ -235,9 +244,15 @@ public partial class TextAnnotation
         SKRect stored = GetStoredBounds();
         HorizontalSpan(stored.Left, (double)stored.Right - stored.Left, (double)stored.Bottom - stored.Top, RotationAngle, out double spanLeft, out double spanRight);
         const double tolerance = Editor.EditorCore.AutoExpandTolerance;
-        return new AnchorLimits(
-            spanLeft < -tolerance ? double.NegativeInfinity : Math.Min(0, spanLeft),
-            spanRight > imageWidth + tolerance ? double.PositiveInfinity : Math.Max(imageWidth, spanRight));
+        double left = Math.Min(0, spanLeft);
+        double right = Math.Max(imageWidth, spanRight);
+        if (allowStuckOut)
+        {
+            if (spanLeft < -tolerance) left = double.NegativeInfinity;
+            if (spanRight > imageWidth + tolerance) right = double.PositiveInfinity;
+        }
+
+        return new AnchorLimits(left, right);
     }
 
     /// <summary>
