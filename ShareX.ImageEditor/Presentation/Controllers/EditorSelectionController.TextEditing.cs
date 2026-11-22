@@ -33,6 +33,7 @@ using ShareX.ImageEditor.Presentation.Helpers;
 using ShareX.ImageEditor.Presentation.Rendering;
 using ShareX.ImageEditor.Presentation.Views;
 using SkiaSharp;
+using static ShareX.ImageEditor.Presentation.Rendering.AnnotationCoordinateHelper;
 
 namespace ShareX.ImageEditor.Presentation.Controllers;
 
@@ -214,7 +215,7 @@ public partial class EditorSelectionController
             }
 
             lastEditorRect = editorRect;
-            UpdateSelectionHandles();
+            MoveTextEditorHandles(textControl, annotation);
         }
 
         textBox.LayoutUpdated += OnTextEditorLayoutUpdated;
@@ -260,5 +261,36 @@ public partial class EditorSelectionController
         textBox.CaretIndex = textBox.Text?.Length ?? 0;
         textBox.SelectionStart = textBox.CaretIndex;
         textBox.SelectionEnd = textBox.CaretIndex;
+    }
+
+    private void MoveTextEditorHandles(OutlinedTextControl target, TextAnnotation annotation)
+    {
+        if (_selectionHandles.Count == 0 || ShouldSuppressSelectionHandles())
+        {
+            UpdateSelectionHandles();
+            return;
+        }
+
+        // Typing changes the rectangle, not the set of resize nodes. Keep the same visuals attached.
+        Rect rect = GetSelectionRect(target);
+        Point Turn(Point p) => RotatePoint(p, rect.Center, annotation.RotationAngle);
+        Point rotate = Turn(new Point(rect.Center.X, rect.Top - 30));
+        foreach (Control handle in _selectionHandles)
+        {
+            if (handle is global::Avalonia.Controls.Shapes.Line line)
+            {
+                line.StartPoint = ToOverlayPoint(Turn(SelectionResizeNode.GetPosition(rect, SelectionResizeNodeKind.TopCenter)));
+                line.EndPoint = ToOverlayPoint(rotate);
+            }
+            else if (handle.Tag is string tag && tag == "Rotate")
+            {
+                SelectionResizeNode.SetPosition(handle, rotate, EditorView.OverlayCanvasBleed);
+            }
+            else if (SelectionResizeNode.TryGetKind(handle.Tag, out var node))
+            {
+                SelectionResizeNode.SetPosition(handle, Turn(SelectionResizeNode.GetPosition(rect, node)), EditorView.OverlayCanvasBleed);
+            }
+        }
+        UpdateHoverOutline();
     }
 }

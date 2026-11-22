@@ -108,14 +108,7 @@ public class EditorZoomController
         if (scrollViewer != null)
         {
             var pointerPosition = e.GetPosition(scrollViewer);
-            var offsetBefore = scrollViewer.Offset;
-            if (scrollViewer.Extent.Width <= scrollViewer.Viewport.Width)
-                offsetBefore = offsetBefore.WithX(0);
-            if (scrollViewer.Extent.Height <= scrollViewer.Viewport.Height)
-                offsetBefore = offsetBefore.WithY(0);
-            var logicalPoint = new Vector(
-               (offsetBefore.X + pointerPosition.X) / oldZoom,
-               (offsetBefore.Y + pointerPosition.Y) / oldZoom);
+            var logicalPoint = LogicalAnchor(scrollViewer, pointerPosition, oldZoom);
 
             _isPointerZooming = true;
             _lastZoom = oldZoom;
@@ -175,14 +168,7 @@ public class EditorZoomController
         var scrollViewer = _view.FindControl<ScrollViewer>("CanvasScrollViewer");
         if (scrollViewer == null || oldZoom <= 0) return;
 
-        var offsetBefore = scrollViewer.Offset;
-        if (scrollViewer.Extent.Width <= scrollViewer.Viewport.Width)
-            offsetBefore = offsetBefore.WithX(0);
-        if (scrollViewer.Extent.Height <= scrollViewer.Viewport.Height)
-            offsetBefore = offsetBefore.WithY(0);
-        var logicalPoint = new Vector(
-            (offsetBefore.X + anchor.X) / oldZoom,
-            (offsetBefore.Y + anchor.Y) / oldZoom);
+        var logicalPoint = LogicalAnchor(scrollViewer, anchor, oldZoom);
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -202,6 +188,29 @@ public class EditorZoomController
                 Math.Clamp(targetOffset.X, 0, maxX),
                 Math.Clamp(targetOffset.Y, 0, maxY));
         }, DispatcherPriority.Render);
+    }
+
+    /// <summary>
+    /// The picture point under <paramref name="anchor"/> at <paramref name="oldZoom"/>, in the extent units the zoom sets the
+    /// scroll offset from (the picture starting at 0).
+    /// </summary>
+    private Vector LogicalAnchor(ScrollViewer scrollViewer, Point anchor, double oldZoom)
+    {
+        // A text's canvas growth may have left a margin holding the picture in place (EditorView.AutoExpand). It goes
+        // with this zoom; measured from where the picture really is, the point under the anchor stays put.
+        if (_view.TakeCanvasHold(scrollViewer) is Point held)
+        {
+            return new Vector((anchor.X - held.X) / oldZoom, (anchor.Y - held.Y) / oldZoom);
+        }
+
+        var offsetBefore = scrollViewer.Offset;
+        if (scrollViewer.Extent.Width <= scrollViewer.Viewport.Width)
+            offsetBefore = offsetBefore.WithX(0);
+        if (scrollViewer.Extent.Height <= scrollViewer.Viewport.Height)
+            offsetBefore = offsetBefore.WithY(0);
+        return new Vector(
+            (offsetBefore.X + anchor.X) / oldZoom,
+            (offsetBefore.Y + anchor.Y) / oldZoom);
     }
 
     public void CenterCanvasOnZoomChange()

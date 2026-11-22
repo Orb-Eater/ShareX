@@ -110,6 +110,7 @@ namespace ShareX.ImageEditor.Presentation.Views
             _selectionController.RequestUpdateEffect += OnRequestUpdateEffect;
             _selectionController.SelectionChanged += OnSelectionChanged;
             LayoutUpdated += OnLayoutUpdated;
+            HookCanvasHoldRelease();
 
             // SIP0018: Subscribe to Core events
             _editorCore.InvalidateRequested += RequestRenderCore;
@@ -132,6 +133,7 @@ namespace ShareX.ImageEditor.Presentation.Views
                             UpdateViewModelHistoryState(vm);
                             UpdateViewModelMetadata(vm);
                             vm.SyncImageDimensions(_editorCore.CanvasSize.Width, _editorCore.CanvasSize.Height);
+                            ApplyPendingCanvasHold(); // a text's canvas growth: the picture keeps its place
 
                             // Sync Core image back to VM if change originated from Core (Undo/Redo, Core Crop)
                             if (!_isWorkspaceHostMode && !_isSyncingFromVM && !_isSyncingToVM && _editorCore.SourceImage != null)
@@ -629,6 +631,7 @@ namespace ShareX.ImageEditor.Presentation.Views
                     // Auto canvas expansion keeps the current scroll position.
                     if (!_suppressScrollResetForAutoExpand)
                     {
+                        ReleaseCanvasHold();
                         _zoomController.ResetScrollViewerOffset();
                     }
                     // During smart padding, use UpdateSourceImage to preserve history and annotations
@@ -648,7 +651,14 @@ namespace ShareX.ImageEditor.Presentation.Views
                 }
                 else if (e.PropertyName == nameof(MainViewModel.Zoom))
                 {
-                    _zoomController.HandleZoomPropertyChanged(vm);
+                    _zoomController.HandleZoomPropertyChanged(vm); // takes a text's canvas hold into its anchor
+                    ReleaseCanvasHold();
+                }
+                else if (e.PropertyName == nameof(MainViewModel.DpiScale))
+                {
+                    // A move to a monitor with another scale changes EffectiveZoom as a zoom does, so the hold's
+                    // margin no longer fits. (EffectiveZoom itself is raised before Zoom, so it can't be used here.)
+                    ReleaseCanvasHold();
                 }
                 else if (e.PropertyName == nameof(MainViewModel.ActiveTool))
                 {
