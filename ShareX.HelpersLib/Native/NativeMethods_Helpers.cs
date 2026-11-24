@@ -26,6 +26,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -72,12 +73,104 @@ namespace ShareX.HelpersLib
             return GetProcessByWindowHandle(handle);
         }
 
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        private const int ERROR_INVALID_PARAMETER = 87;
+        private const int ERROR_INSUFFICIENT_BUFFER = 122;
+
         public static string GetForegroundWindowProcessName()
         {
-            using (Process process = GetForegroundWindowProcess())
+            return GetProcessNameByWindowHandle(GetForegroundWindow());
+        }
+
+        public static string GetProcessFilePathByProcessId(uint processId)
+        {
+            return GetProcessFilePathByProcessId(processId, out _);
+        }
+
+        private static string GetProcessFilePathByProcessId(uint processId, out int openError)
+        {
+            openError = 0;
+            if (processId == 0) return null;
+
+            IntPtr processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (processHandle == IntPtr.Zero)
             {
-                return process?.ProcessName;
+                openError = Marshal.GetLastWin32Error();
+                return null;
             }
+
+            try
+            {
+                char[] buffer = new char[260];
+
+                while (true)
+                {
+                    uint length = (uint)buffer.Length;
+
+                    if (QueryFullProcessImageName(processHandle, 0, buffer, ref length))
+                    {
+                        return length > 0 ? new string(buffer, 0, (int)length) : null;
+                    }
+
+                    if (Marshal.GetLastWin32Error() != ERROR_INSUFFICIENT_BUFFER || buffer.Length >= 32768)
+                    {
+                        return null;
+                    }
+
+                    buffer = new char[buffer.Length * 2];
+                }
+            }
+            finally
+            {
+                CloseHandle(processHandle);
+            }
+        }
+
+        public static string GetProcessFilePathByWindowHandle(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return null;
+            if (GetWindowThreadProcessId(hwnd, out uint processID) == 0 || processID == 0) return null;
+
+            return GetProcessFilePathByProcessId(processID);
+        }
+
+        // Fast O(1) lookup via QueryFullProcessImageName instead of Process.GetProcessById, which snapshots
+        // every process and thread on Windows. Falls back to Process.GetProcessById for protected processes.
+        public static string GetProcessNameByWindowHandle(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return null;
+            if (GetWindowThreadProcessId(hwnd, out uint processID) == 0 || processID == 0) return null;
+
+            string filePath = GetProcessFilePathByProcessId(processID, out int openError);
+
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                string fileName = Path.GetFileName(filePath);
+
+                if (!string.IsNullOrEmpty(fileName))
+                {
+                    return fileName.Length > 4 && fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                        ? fileName.Substring(0, fileName.Length - 4)
+                        : fileName;
+                }
+            }
+
+            // Process already exited: no point taking a full-system process snapshot.
+            if (openError == ERROR_INVALID_PARAMETER) return null;
+
+            try
+            {
+                using (Process process = Process.GetProcessById((int)processID))
+                {
+                    return process?.ProcessName;
+                }
+            }
+            catch (Exception e)
+            {
+                DebugHelper.WriteException(e);
+            }
+
+            return null;
         }
 
         public static Process GetProcessByWindowHandle(IntPtr hwnd)

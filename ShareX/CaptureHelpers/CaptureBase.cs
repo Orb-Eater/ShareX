@@ -25,6 +25,7 @@
 
 using ShareX.HelpersLib;
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Threading.Tasks;
 
@@ -34,6 +35,8 @@ namespace ShareX
     {
         public bool AllowAutoHideForm { get; set; } = true;
         public bool AllowAnnotation { get; set; } = true;
+        protected string CaptureTimingLabel { get; set; }
+        protected string CaptureTimingDetail { get; set; }
 
         public void Capture(bool autoHideForm)
         {
@@ -80,14 +83,21 @@ namespace ShareX
 
         private async Task CaptureInternalAsync(TaskSettings taskSettings, bool autoHideForm)
         {
+            long captureStart = Stopwatch.GetTimestamp();
+            double toastMs = 0;
+            double waitMs = 0;
             bool wait = false;
             bool showDesktopIcons = false;
             bool showMainForm = false;
 
             if (taskSettings.GeneralSettings.ToastWindowAutoHide)
             {
+                long toastStart = Stopwatch.GetTimestamp();
                 await NotificationWindow.CloseActiveWindowAsync();
+                toastMs = Stopwatch.GetElapsedTime(toastStart).TotalMilliseconds;
             }
+
+            long waitStart = Stopwatch.GetTimestamp();
 
             if (taskSettings.CaptureSettings.CaptureAutoHideDesktopIcons && !CaptureHelpers.IsActiveWindowFullscreen() && DesktopIconManager.AreDesktopIconsVisible())
             {
@@ -106,6 +116,7 @@ namespace ShareX
             if (wait)
             {
                 await Task.Delay(250);
+                waitMs = Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds;
             }
 
             TaskMetadata metadata = null;
@@ -113,6 +124,8 @@ namespace ShareX
             try
             {
                 AllowAnnotation = true;
+                CaptureTimingLabel = null;
+                CaptureTimingDetail = null;
                 metadata = await ExecuteAsync(taskSettings);
             }
             catch (Exception ex)
@@ -131,9 +144,23 @@ namespace ShareX
                     MainWindowIntegration.Activate();
                 }
 
+                // Snapshot image dimensions before AfterCapture hands metadata/SKBitmap ownership to the worker thread.
+                string size = metadata?.Image is { } img ? $", {img.Width}x{img.Height}" : "";
+                string timingLabel = CaptureTimingLabel;
+                string timingDetail = CaptureTimingDetail;
+
+                long queueStart = Stopwatch.GetTimestamp();
                 // A cancelled capture never starts a task, and its overlay's GPU surfaces stay until the next frame.
                 IdleMemoryRelease.Schedule();
                 AfterCapture(metadata, taskSettings);
+                double queueMs = Stopwatch.GetElapsedTime(queueStart).TotalMilliseconds;
+
+                if (timingDetail != null)
+                {
+                    double totalMs = Stopwatch.GetElapsedTime(captureStart).TotalMilliseconds;
+                    string waitPart = wait ? $", wait {waitMs:F0}" : "";
+                    DebugHelper.WriteLine($"{timingLabel ?? "Capture"}: {totalMs:F0} ms (toast {toastMs:F0}{waitPart}, {timingDetail}, queue {queueMs:F0}{size}).");
+                }
             }
         }
 

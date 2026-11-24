@@ -41,21 +41,15 @@ namespace ShareX.HelpersLib
 
         public Process Process => NativeMethods.GetProcessByWindowHandle(Handle);
 
-        public string ProcessName
-        {
-            get
-            {
-                using (Process process = Process)
-                {
-                    return process?.ProcessName;
-                }
-            }
-        }
+        public string ProcessName => NativeMethods.GetProcessNameByWindowHandle(Handle);
 
         public string ProcessFilePath
         {
             get
             {
+                string filePath = NativeMethods.GetProcessFilePathByWindowHandle(Handle);
+                if (!string.IsNullOrEmpty(filePath)) return filePath;
+
                 using (Process process = Process)
                 {
                     return process?.MainModule?.FileName;
@@ -69,10 +63,12 @@ namespace ShareX.HelpersLib
         {
             get
             {
-                using (Process process = Process)
+                if (Handle != IntPtr.Zero && NativeMethods.GetWindowThreadProcessId(Handle, out uint processId) != 0)
                 {
-                    return process.Id;
+                    return (int)processId;
                 }
+
+                return 0;
             }
         }
 

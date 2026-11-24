@@ -43,6 +43,7 @@ using ShareX.Localization;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using DrawingBitmap = SkiaSharp.SKBitmap;
 using DrawingColor = System.Drawing.Color;
@@ -59,6 +60,7 @@ public partial class NotificationWindow : Window
     private const double MinimumTextWidth = 240;
     private const double MaximumTextWidth = 520;
     private static NotificationWindow? _instance;
+    private static int _pendingShows;
 
     private readonly DispatcherTimer _durationTimer;
     private readonly DispatcherTimer _fadeTimer;
@@ -135,24 +137,40 @@ public partial class NotificationWindow : Window
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        Interlocked.Increment(ref _pendingShows);
+        try
         {
-            double queued = MillisecondsSince(asked);
-            bool isNew = _instance == null;
-            _instance ??= new NotificationWindow();
-            double made = MillisecondsSince(asked);
-            _instance.LoadConfig(config);
-            double loaded = MillisecondsSince(asked);
-
-            if (!_instance.IsVisible)
+            Dispatcher.UIThread.Post(() =>
             {
-                _instance.Show();
-            }
+                try
+                {
+                    double queued = MillisecondsSince(asked);
+                    bool isNew = _instance == null;
+                    _instance ??= new NotificationWindow();
+                    double made = MillisecondsSince(asked);
+                    _instance.LoadConfig(config);
+                    double loaded = MillisecondsSince(asked);
 
-            _instance._timingStart = asked;
-            _instance._timingSteps = $"wait {queued:F0}, {(isNew ? "new window" : "same window")} {made - queued:F0}, " +
-                $"content {loaded - made:F0}, show {MillisecondsSince(asked) - loaded:F0}";
-        });
+                    if (!_instance.IsVisible)
+                    {
+                        _instance.Show();
+                    }
+
+                    _instance._timingStart = asked;
+                    _instance._timingSteps = $"wait {queued:F0}, {(isNew ? "new window" : "same window")} {made - queued:F0}, " +
+                        $"content {loaded - made:F0}, show {MillisecondsSince(asked) - loaded:F0}";
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _pendingShows);
+                }
+            });
+        }
+        catch
+        {
+            Interlocked.Decrement(ref _pendingShows);
+            throw;
+        }
     }
 
     private static double MillisecondsSince(long timestamp) => Stopwatch.GetElapsedTime(timestamp).TotalMilliseconds;
@@ -170,14 +188,20 @@ public partial class NotificationWindow : Window
         DebugHelper.WriteLine($"Notification: in place {MillisecondsSince(_timingStart):F0} ms after it was asked for ({steps}).");
     }
 
-    public static async Task CloseActiveWindowAsync()
+    public static Task CloseActiveWindowAsync()
     {
         if (Application.Current == null)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        await Dispatcher.UIThread.InvokeAsync(() => _instance?.Close());
+        // Fast path on the UI thread when no notification window exists or is queued: avoid an unnecessary dispatcher yield.
+        if (Dispatcher.UIThread.CheckAccess() && _instance == null && Volatile.Read(ref _pendingShows) == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Dispatcher.UIThread.InvokeAsync(() => _instance?.Close()).GetTask();
     }
 
     public void LoadConfig(NotificationWindowConfig config)
