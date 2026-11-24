@@ -26,6 +26,7 @@
 // Source: https://github.com/Burtsev-Alexey/net-object-deep-copy
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 
@@ -34,11 +35,82 @@ namespace ShareX.HelpersLib
     public static class ObjectExtensions
     {
         private static readonly MethodInfo CloneMethod = typeof(object).GetMethod("MemberwiseClone", BindingFlags.NonPublic | BindingFlags.Instance);
+        private static readonly Func<object, object> Clone = (Func<object, object>)Delegate.CreateDelegate(typeof(Func<object, object>), CloneMethod);
+        private static readonly ConcurrentDictionary<Type, bool> ShallowCopySafeCache = new ConcurrentDictionary<Type, bool>();
+        private static readonly ConcurrentDictionary<Type, FieldInfo[]> FieldsToCopyCache = new ConcurrentDictionary<Type, FieldInfo[]>();
 
         public static bool IsPrimitive(this Type type)
         {
             if (type == typeof(string)) return true;
             return type.IsValueType && type.IsPrimitive;
+        }
+
+        private static bool IsImmutable(Type type)
+        {
+            return type == typeof(string)
+                || (type.IsValueType && (type.IsPrimitive || type.IsEnum
+                    || type == typeof(decimal)
+                    || type == typeof(DateTime)
+                    || type == typeof(DateTimeOffset)
+                    || type == typeof(TimeSpan)
+                    || type == typeof(Guid)));
+        }
+
+        // True when MemberwiseClone already makes an independent copy of a field/array element of this type
+        // (immutable types and value types whose fields are all shallow-copy-safe, e.g. Color/Point/Size/Rectangle).
+        private static bool IsShallowCopySafe(Type type)
+        {
+            if (IsImmutable(type)) return true;
+            if (!type.IsValueType) return false;
+            return ShallowCopySafeCache.GetOrAdd(type, static t => ComputeShallowCopySafe(t, new HashSet<Type>()));
+        }
+
+        private static bool ComputeShallowCopySafe(Type type, HashSet<Type> visiting)
+        {
+            if (IsImmutable(type)) return true;
+            if (!type.IsValueType) return false;
+            if (ShallowCopySafeCache.TryGetValue(type, out bool cached)) return cached;
+            if (!visiting.Add(type)) return false;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.DeclaredOnly;
+            foreach (FieldInfo field in type.GetFields(flags))
+            {
+                if (!ComputeShallowCopySafe(field.FieldType, visiting))
+                {
+                    return false;
+                }
+            }
+
+            visiting.Remove(type);
+            return true;
+        }
+
+        private static FieldInfo[] GetFieldsToCopy(Type type)
+        {
+            return FieldsToCopyCache.GetOrAdd(type, static t =>
+            {
+                var fields = new List<FieldInfo>();
+                CollectFields(t, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.FlattenHierarchy, null, fields);
+                CollectBasePrivateFields(t.BaseType, fields);
+                return fields.Count == 0 ? Array.Empty<FieldInfo>() : fields.ToArray();
+            });
+        }
+
+        private static void CollectBasePrivateFields(Type baseType, List<FieldInfo> fields)
+        {
+            if (baseType == null) return;
+            CollectBasePrivateFields(baseType.BaseType, fields);
+            CollectFields(baseType, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly, static info => info.IsPrivate, fields);
+        }
+
+        private static void CollectFields(Type type, BindingFlags bindingFlags, Func<FieldInfo, bool> filter, List<FieldInfo> fields)
+        {
+            foreach (FieldInfo fieldInfo in type.GetFields(bindingFlags))
+            {
+                if (filter != null && !filter(fieldInfo)) continue;
+                if (IsShallowCopySafe(fieldInfo.FieldType)) continue;
+                fields.Add(fieldInfo);
+            }
         }
 
         public static object Copy(this object originalObject)
@@ -50,14 +122,14 @@ namespace ShareX.HelpersLib
         {
             if (originalObject == null) return null;
             Type typeToReflect = originalObject.GetType();
-            if (IsPrimitive(typeToReflect)) return originalObject;
-            if (visited.ContainsKey(originalObject)) return visited[originalObject];
+            if (IsImmutable(typeToReflect)) return originalObject;
+            if (visited.TryGetValue(originalObject, out object existing)) return existing;
             if (typeof(Delegate).IsAssignableFrom(typeToReflect)) return null;
-            object cloneObject = CloneMethod.Invoke(originalObject, null);
+            object cloneObject = Clone(originalObject);
             if (typeToReflect.IsArray)
             {
                 Type arrayType = typeToReflect.GetElementType();
-                if (IsPrimitive(arrayType) == false)
+                if (!IsShallowCopySafe(arrayType))
                 {
                     Array clonedArray = (Array)cloneObject;
                     clonedArray.ForEach((array, indices) => array.SetValue(InternalCopy(clonedArray.GetValue(indices), visited), indices));
@@ -65,26 +137,15 @@ namespace ShareX.HelpersLib
             }
             visited.Add(originalObject, cloneObject);
             CopyFields(originalObject, visited, cloneObject, typeToReflect);
-            RecursiveCopyBaseTypePrivateFields(originalObject, visited, cloneObject, typeToReflect);
             return cloneObject;
         }
 
-        private static void RecursiveCopyBaseTypePrivateFields(object originalObject, IDictionary<object, object> visited, object cloneObject, Type typeToReflect)
+        private static void CopyFields(object originalObject, IDictionary<object, object> visited, object cloneObject, Type typeToReflect)
         {
-            if (typeToReflect.BaseType != null)
+            foreach (FieldInfo fieldInfo in GetFieldsToCopy(typeToReflect))
             {
-                RecursiveCopyBaseTypePrivateFields(originalObject, visited, cloneObject, typeToReflect.BaseType);
-                CopyFields(originalObject, visited, cloneObject, typeToReflect.BaseType, BindingFlags.Instance | BindingFlags.NonPublic, info => info.IsPrivate);
-            }
-        }
-
-        private static void CopyFields(object originalObject, IDictionary<object, object> visited, object cloneObject, Type typeToReflect, BindingFlags bindingFlags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.FlattenHierarchy, Func<FieldInfo, bool> filter = null)
-        {
-            foreach (FieldInfo fieldInfo in typeToReflect.GetFields(bindingFlags))
-            {
-                if (filter != null && filter(fieldInfo) == false) continue;
-                if (IsPrimitive(fieldInfo.FieldType)) continue;
                 object originalFieldValue = fieldInfo.GetValue(originalObject);
+                if (originalFieldValue == null) continue;
                 object clonedFieldValue = InternalCopy(originalFieldValue, visited);
                 fieldInfo.SetValue(cloneObject, clonedFieldValue);
             }

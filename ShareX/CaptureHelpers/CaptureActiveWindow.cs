@@ -23,14 +23,19 @@
 
 #endregion License Information (GPL v3)
 
+using System.Diagnostics;
+
 namespace ShareX
 {
     public class CaptureActiveWindow : CaptureBase
     {
         protected override TaskMetadata Execute(TaskSettings taskSettings)
         {
+            long metaStart = Stopwatch.GetTimestamp();
             TaskMetadata metadata = CreateMetadata();
+            double metaMs = Stopwatch.GetElapsedTime(metaStart).TotalMilliseconds;
 
+            long grabStart = Stopwatch.GetTimestamp();
             if (taskSettings.CaptureSettings.CaptureTransparent && !taskSettings.CaptureSettings.CaptureClientArea)
             {
                 metadata.Image = TaskHelpers.GetScreenshot(taskSettings).CaptureActiveWindowTransparent();
@@ -39,6 +44,10 @@ namespace ShareX
             {
                 metadata.Image = TaskHelpers.GetScreenshot(taskSettings).CaptureActiveWindow();
             }
+            double grabMs = Stopwatch.GetElapsedTime(grabStart).TotalMilliseconds;
+
+            CaptureTimingLabel = "Active window capture";
+            CaptureTimingDetail = $"metadata {metaMs:F0}, grab {grabMs:F0}";
 
             return metadata;
         }
