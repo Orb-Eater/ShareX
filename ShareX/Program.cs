@@ -286,10 +286,11 @@ internal static class Program
                 try
                 {
                     FastPngWriter.WarmUp();
+                    ShareX.ScreenCaptureLib.DxgiDesktopCapturer.WarmUpDevice();
                 }
                 catch (Exception e)
                 {
-                    DebugHelper.WriteException(e, "PNG writer warm-up failed.");
+                    DebugHelper.WriteException(e, "Capture warm-up failed.");
                 }
             });
         }
@@ -301,24 +302,29 @@ internal static class Program
         {
             await Task.Delay(1000);
 
-            // Two runs: after only one, the second real capture is still slower than the rest.
+            // Warm DXGI D3D11 device + FastPngWriter off the UI thread first so prewarm & first capture avoid cold init.
+            await Task.Run(() =>
+            {
+                FastPngWriter.WarmUp();
+                ShareX.ScreenCaptureLib.DxgiDesktopCapturer.WarmUpDevice();
+            });
+
+            // Two passes: first builds and shows the offscreen window, second warms the parked-window reuse path.
             for (int i = 0; i < 2; i++)
             {
                 if (RegionCaptureIntegration.IsCaptureOpen) break;
                 await new CaptureRegion().PrewarmAsync(TaskSettings.GetDefaultTaskSettings());
-                await Task.Delay(200);
+                await Task.Delay(100);
             }
-
-            // The PNG writer for captures, off the UI thread: its first use would otherwise be the first save.
-            await Task.Run(FastPngWriter.WarmUp);
-
-            // Let the spare window (posted at Background priority) be built first.
-            await Task.Delay(500);
-            IdleMemoryRelease.Schedule();
         }
         catch (Exception e)
         {
             DebugHelper.WriteException(e, "Region capture prewarm failed.");
+        }
+        finally
+        {
+            await Task.Delay(300);
+            IdleMemoryRelease.Schedule();
         }
     }
 }

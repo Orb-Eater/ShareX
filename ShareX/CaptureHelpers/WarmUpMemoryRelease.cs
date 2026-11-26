@@ -55,6 +55,8 @@ internal static class WarmUpMemoryRelease
         try
         {
             if (!canRelease()) return;
+            await ShareX.ScreenCaptureLib.Presentation.RegionCapture.RegionCaptureIntegration.TrimParkedWindowForIdleAsync();
+            if (!canRelease()) return;
             await RenderJanitorFramesAsync(canRelease);
             if (!canRelease()) return;
 
@@ -62,6 +64,7 @@ internal static class WarmUpMemoryRelease
             // 4K capture, kept until the next scaled-down image replaces them.
             SKGraphics.PurgeResourceCache();
             FastPngWriter.ReleaseBuffers();
+            ShareX.ScreenCaptureLib.DxgiDesktopCapturer.TrimIdle();
 
             // A collection already started cannot be cancelled. Recheck activity at every awaited boundary.
             await Task.Run(() =>
@@ -313,6 +316,7 @@ internal static class WarmUpMemoryRelease
             if (feature == null) return;
 
             using ISkiaSharpApiLease lease = feature.Lease();
+            ShareX.ScreenCaptureLib.Presentation.RegionCapture.DxgiAngleSurfaceSource.DrainPendingGpuCleanup(lease);
             GRContext? gr = lease.GrContext;
             if (gr == null) return;
 

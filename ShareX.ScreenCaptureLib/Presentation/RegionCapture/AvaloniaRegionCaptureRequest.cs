@@ -33,8 +33,14 @@ namespace ShareX.ScreenCaptureLib.Presentation.RegionCapture;
 
 public sealed class AvaloniaRegionCaptureRequest
 {
-    /// <summary>Frozen screenshot. Ownership transfers to the capture window.</summary>
-    public required SKBitmap Screenshot { get; init; }
+    /// <summary>Frozen CPU screenshot (optional when <see cref="GpuSnapshot"/> is provided). Ownership transfers to the capture window.</summary>
+    public SKBitmap? Screenshot { get; init; }
+
+    /// <summary>
+    /// Frozen GPU-resident desktop snapshot captured via DXGI Desktop Duplication with zero CPU readback.
+    /// Ownership transfers to the capture window.
+    /// </summary>
+    public DxgiGpuDesktopSnapshot? GpuSnapshot { get; init; }
 
     /// <summary>
     /// Every pixel of <see cref="Screenshot"/> has alpha 255, as in a screen capture. The overlay then draws

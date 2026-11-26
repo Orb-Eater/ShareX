@@ -62,6 +62,12 @@
                   PointerMoved="OnRegionPointerMoved"
                   PointerReleased="OnRegionPointerReleased"
                   PointerWheelChanged="OnRegionPointerWheelChanged">
+                <Canvas x:Name="CapturedCursorCanvas" IsHitTestVisible="False">
+                    <Image x:Name="CapturedCursorImage"
+                           IsHitTestVisible="False"
+                           IsVisible="False"
+                           Stretch="None"/>
+                </Canvas>
                 <capture:RegionSelectionOverlay x:Name="RegionOverlay"
                                                 AccentBrush="{DynamicResource ShareX.Brush.Accent.Start}"
                                                 IsHitTestVisible="False"/>

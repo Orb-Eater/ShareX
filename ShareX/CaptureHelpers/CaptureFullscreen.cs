@@ -24,6 +24,7 @@
 #endregion License Information (GPL v3)
 
 using ShareX.HelpersLib;
+using System.Diagnostics;
 using System.Drawing;
 
 namespace ShareX
@@ -32,9 +33,18 @@ namespace ShareX
     {
         protected override TaskMetadata Execute(TaskSettings taskSettings)
         {
+            long metaStart = Stopwatch.GetTimestamp();
             Rectangle rect = CaptureHelpers.GetScreenWorkingArea();
             TaskMetadata metadata = CreateMetadata(rect);
+            double metaMs = Stopwatch.GetElapsedTime(metaStart).TotalMilliseconds;
+
+            long grabStart = Stopwatch.GetTimestamp();
             metadata.Image = TaskHelpers.GetScreenshot(taskSettings).CaptureFullscreen();
+            double grabMs = Stopwatch.GetElapsedTime(grabStart).TotalMilliseconds;
+
+            CaptureTimingLabel = "Fullscreen capture";
+            CaptureTimingDetail = $"metadata {metaMs:F0}, grab {grabMs:F0}";
+
             return metadata;
         }
     }

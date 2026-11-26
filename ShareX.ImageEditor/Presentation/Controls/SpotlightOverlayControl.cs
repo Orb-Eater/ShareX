@@ -39,16 +39,15 @@ public class SpotlightOverlayControl : SKCanvasControl
         width = Math.Max(1, width);
         height = Math.Max(1, height);
 
-        Initialize(width, height);
-
         if (spotlights == null || spotlights.Count == 0)
         {
             IsVisible = false;
             ClearBlurCache();
-            Draw(canvas => canvas.Clear(SKColors.Transparent));
+            ClearSource();
             return;
         }
 
+        Initialize(width, height);
         IsVisible = true;
 
         byte darkenOpacity = spotlights.Max(spotlight => spotlight.DarkenOpacity);

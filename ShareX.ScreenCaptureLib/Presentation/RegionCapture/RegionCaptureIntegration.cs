@@ -55,31 +55,98 @@ public static class RegionCaptureIntegration
         LastRegionRectangles = regions;
     }
 
-    // Built ahead of the next capture on an idle UI thread, because loading the window takes longer than using it.
-    private static RegionCaptureWindow? _spareWindow;
-    private static CultureInfo? _spareWindowCulture;
-    private static string? _spareWindowScreens;
+    // Pre-warmed hidden window reused across captures to avoid per-hotkey visual tree + HWND + swapchain construction.
+    private static RegionCaptureWindow? _parkedWindow;
+    private static CultureInfo? _parkedWindowCulture;
+    private static string? _parkedWindowScreens;
+    private static Avalonia.Styling.ThemeVariant? _parkedWindowTheme;
     private static int _openCaptures;
 
     /// <summary>True while a real capture overlay is open. Warm-up runs do not count.</summary>
     public static bool IsCaptureOpen => _openCaptures > 0;
 
+    /// <summary>True while <see cref="TrimParkedWindowForIdleAsync"/> briefly renders a 1x1 off-screen frame to shrink the swapchain.</summary>
+    public static bool IsTrimmingIdleWindow { get; private set; }
+
+    /// <summary>Raised on the UI thread when a real (non-prewarm) region capture finishes so idle memory release can schedule.</summary>
+    public static event Action? CaptureEnded;
+
     private static void CreateSpareWindow()
     {
         try
         {
-            // Building it takes 100 ms or more on the UI thread, which would stall an open overlay.
-            // The capture that is open posts this again when it closes.
-            if (_spareWindow == null && !IsCaptureOpen)
+            if (_parkedWindow == null && !IsCaptureOpen)
             {
-                _spareWindowCulture = CultureInfo.CurrentUICulture;
-                _spareWindowScreens = GetScreenSetup();
-                _spareWindow = new RegionCaptureWindow();
+                _parkedWindowCulture = CultureInfo.CurrentUICulture;
+                _parkedWindowScreens = GetScreenSetup();
+                _parkedWindowTheme = ShareX.AvaloniaUI.Theming.ThemeManager.GetCurrentTheme();
+                _parkedWindow = new RegionCaptureWindow { AllowReuse = true };
             }
         }
         catch (Exception ex)
         {
             DebugHelper.WriteException(ex);
+        }
+    }
+
+    /// <summary>Closes any parked region capture window on application shutdown.</summary>
+    public static void Shutdown()
+    {
+        void CloseParked()
+        {
+            RegionCaptureWindow? parked = _parkedWindow;
+            _parkedWindow = null;
+            if (parked != null && !parked.IsPermanentlyClosed)
+            {
+                parked.AllowReuse = false;
+                try { parked.Close(); } catch { }
+            }
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            CloseParked();
+        }
+        else
+        {
+            try { Dispatcher.UIThread.Post(CloseParked); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Shrinks the parked hidden region capture window's GPU swapchain down to 1x1 during idle so idle RAM and GPU/DWM
+    /// commit stay at baseline while keeping the visual tree, EditorView, toolbar, and HWND warm for fast wake-up.
+    /// </summary>
+    public static async Task TrimParkedWindowForIdleAsync()
+    {
+        if (!Dispatcher.UIThread.CheckAccess() || IsCaptureOpen) return;
+        RegionCaptureWindow? parked = _parkedWindow;
+        if (parked == null || parked.IsPermanentlyClosed || parked.IsVisible) return;
+        IsTrimmingIdleWindow = true;
+        try
+        {
+            await parked.TrimSwapchainForIdleAsync();
+        }
+        finally
+        {
+            IsTrimmingIdleWindow = false;
+        }
+    }
+
+    /// <summary>
+    /// Drops the parked region capture window when idle memory release requests reclaiming its swapchain/HWND.
+    /// Does nothing while a real capture is open.
+    /// </summary>
+    public static void ReleaseParkedWindowForIdle()
+    {
+        if (!Dispatcher.UIThread.CheckAccess() || IsCaptureOpen) return;
+        RegionCaptureWindow? parked = _parkedWindow;
+        if (parked == null) return;
+        _parkedWindow = null;
+        if (!parked.IsPermanentlyClosed)
+        {
+            parked.AllowReuse = false;
+            try { parked.Close(); } catch { }
         }
     }
 
@@ -142,8 +209,18 @@ public static class RegionCaptureIntegration
     public static Task<AvaloniaRegionCaptureResult?> CaptureAsync(AvaloniaRegionCaptureRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.Screenshot == null) request.CursorBitmap?.Dispose();
-        ArgumentNullException.ThrowIfNull(request.Screenshot);
+        if (request.Screenshot == null && request.GpuSnapshot == null)
+        {
+            request.CursorBitmap?.Dispose();
+            throw new ArgumentException("Either Screenshot or GpuSnapshot must be provided.", nameof(request));
+        }
+
+        void DisposeRequestResources()
+        {
+            request.Screenshot?.Dispose();
+            request.GpuSnapshot?.Dispose();
+            request.CursorBitmap?.Dispose();
+        }
 
         try
         {
@@ -151,16 +228,14 @@ public static class RegionCaptureIntegration
         }
         catch (Exception ex)
         {
-            request.Screenshot.Dispose();
-            request.CursorBitmap?.Dispose();
+            DisposeRequestResources();
             return Task.FromException<AvaloniaRegionCaptureResult?>(ex);
         }
 
         // A warm-up window that cannot sit entirely above the desktop (a very tall capture area) would show on screen.
         if (request.Prewarm && !RegionCaptureWindow.CanWarmUpOffScreen(request.ScreenBounds, CaptureHelpers.GetScreenBounds().Y))
         {
-            request.Screenshot.Dispose();
-            request.CursorBitmap?.Dispose();
+            DisposeRequestResources();
             return Task.FromResult<AvaloniaRegionCaptureResult?>(null);
         }
 
@@ -176,20 +251,47 @@ public static class RegionCaptureIntegration
             try
             {
                 ImageEditorIntegration.Initialize();
-                RegionCaptureWindow? spare = _spareWindow;
-                _spareWindow = null;
-                // A spare built before a language change would show the old language, and one built before a
-                // display change could have the wrong scale. One that was closed cannot be shown.
-                if (spare != null && (spare.TryGetPlatformHandle() == null || !Equals(_spareWindowCulture, CultureInfo.CurrentUICulture) ||
-                    _spareWindowScreens != GetScreenSetup()))
+                RegionCaptureWindow? parked = _parkedWindow;
+                _parkedWindow = null;
+
+                CultureInfo currentCulture = CultureInfo.CurrentUICulture;
+                string currentScreens = GetScreenSetup();
+                Avalonia.Styling.ThemeVariant currentTheme = ShareX.AvaloniaUI.Theming.ThemeManager.GetCurrentTheme();
+
+                // A parked window built before a language, theme, or display change cannot be reused safely.
+                if (parked != null && (parked.IsPermanentlyClosed ||
+                    parked.TryGetPlatformHandle() == null ||
+                    !Equals(_parkedWindowCulture, currentCulture) ||
+                    _parkedWindowScreens != currentScreens ||
+                    !Equals(_parkedWindowTheme, currentTheme)))
                 {
-                    spare.Close(); // A window that was never shown must still be closed, or its HWND stays alive.
-                    spare = null;
+                    parked.AllowReuse = false;
+                    if (!parked.IsPermanentlyClosed) parked.Close();
+                    parked = null;
                 }
-                window = spare ?? new RegionCaptureWindow();
+
+                bool reused = parked != null && parked.HasOpenedOnce;
+                window = parked ?? new RegionCaptureWindow { AllowReuse = true };
+                window.AllowReuse = true;
                 window.Bind(request);
                 AvaloniaRegionCaptureResult? result = await window.CaptureAsync();
-                if (!request.Prewarm) LogCaptureEnd(window.EndReason, result, start);
+
+                if (!request.Prewarm) LogCaptureEnd(window.EndReason, result, start, reused);
+
+                // Park the warm hidden window for the next capture unless another capture already took the slot or it was closed.
+                if (!window.IsPermanentlyClosed && window.TryGetPlatformHandle() != null && _parkedWindow == null)
+                {
+                    _parkedWindow = window;
+                    _parkedWindowCulture = currentCulture;
+                    _parkedWindowScreens = currentScreens;
+                    _parkedWindowTheme = currentTheme;
+                }
+                else if (!window.IsPermanentlyClosed)
+                {
+                    window.AllowReuse = false;
+                    window.Close();
+                }
+
                 completion.TrySetResult(result);
             }
             catch (Exception ex)
@@ -202,16 +304,28 @@ public static class RegionCaptureIntegration
 
                 if (window == null || !window.IsVisible)
                 {
-                    request.Screenshot.Dispose();
-                    request.CursorBitmap?.Dispose();
+                    DisposeRequestResources();
+                }
+
+                if (window != null && !window.IsPermanentlyClosed)
+                {
+                    window.AllowReuse = false;
+                    try { window.Close(); } catch { }
                 }
 
                 completion.TrySetException(ex);
             }
             finally
             {
-                if (!request.Prewarm) _openCaptures--;
-                Dispatcher.UIThread.Post(CreateSpareWindow, DispatcherPriority.Background);
+                if (!request.Prewarm)
+                {
+                    _openCaptures--;
+                    try { CaptureEnded?.Invoke(); } catch { }
+                }
+                if (_parkedWindow == null)
+                {
+                    Dispatcher.UIThread.Post(CreateSpareWindow, DispatcherPriority.Background);
+                }
             }
         });
 
@@ -220,21 +334,22 @@ public static class RegionCaptureIntegration
 
     // One line per capture, so the log shows whether a capture was taken or cancelled and why.
     // It must never turn a good capture into a failed one, so nothing it does may throw.
-    private static void LogCaptureEnd(string reason, AvaloniaRegionCaptureResult? result, long start)
+    private static void LogCaptureEnd(string reason, AvaloniaRegionCaptureResult? result, long start, bool reusedWindow)
     {
         try
         {
             long elapsed = ElapsedMilliseconds(start);
+            string reuseTag = reusedWindow ? ", reused" : "";
 
             if (result == null)
             {
-                DebugHelper.WriteLine($"Region capture ended: {reason}, nothing captured, open {elapsed} ms.");
+                DebugHelper.WriteLine($"Region capture ended: {reason}, nothing captured, open {elapsed} ms{reuseTag}.");
                 return;
             }
 
             Rectangle area = result.ScreenRectangle;
             string annotated = result.ImageModified ? ", with annotations" : "";
-            DebugHelper.WriteLine($"Region capture ended: {reason}, captured {result.Image.Width}x{result.Image.Height} at {area.X},{area.Y}{annotated}, open {elapsed} ms.");
+            DebugHelper.WriteLine($"Region capture ended: {reason}, captured {result.Image.Width}x{result.Image.Height} at {area.X},{area.Y}{annotated}, open {elapsed} ms{reuseTag}.");
         }
         catch
         {

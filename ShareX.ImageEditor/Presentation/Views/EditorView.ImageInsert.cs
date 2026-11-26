@@ -140,7 +140,13 @@ namespace ShareX.ImageEditor.Presentation.Views
                 return;
             }
 
-            if (!vm.HasPreviewImage || _editorCore.SourceImage == null)
+            if (!vm.HasPreviewImage)
+            {
+                LoadBitmapIntoEditor(vm, skBitmap, sourceFilePath);
+                return;
+            }
+
+            if (_editorCore.SourceImage == null && !EnsureCpuWorkspaceImage())
             {
                 LoadBitmapIntoEditor(vm, skBitmap, sourceFilePath);
                 return;
@@ -270,6 +276,7 @@ namespace ShareX.ImageEditor.Presentation.Views
 
         internal void CloneRegion(Rect sourceRectangle)
         {
+            EnsureCpuWorkspaceImage();
             SKBitmap? sourceImage = _editorCore.SourceImage;
             if (sourceImage == null)
             {

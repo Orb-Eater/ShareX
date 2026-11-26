@@ -71,6 +71,7 @@ internal static class ApplicationLifecycle
 
         Interlocked.Exchange(ref _exitStarted, 1);
         ShareX.Tools.MouseHighlighterManager.Shutdown();
+        ShareX.ScreenCaptureLib.Presentation.RegionCapture.RegionCaptureIntegration.Shutdown();
         MainWindowIntegration.Close();
         TaskManager.StopAllTasks();
         AvaloniaBootstrapper.Shutdown();
@@ -85,6 +86,7 @@ internal static class ApplicationLifecycle
 
         Program.FlushEditorLogRepeats();
         DebugHelper.WriteLine("ShareX closing.");
+        ShareX.ScreenCaptureLib.DxgiDesktopCapturer.Shutdown();
         ApplicationState.WatchFolderManager?.Dispose();
         ApplicationState.WatchFolderManager = null;
         SettingManager.HistoryClose();

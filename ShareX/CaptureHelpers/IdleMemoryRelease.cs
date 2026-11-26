@@ -52,10 +52,12 @@ internal static class IdleMemoryRelease
         _initialized = true;
         Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) => OnWindowActivity(window));
         Window.WindowClosedEvent.AddClassHandler<Window>((window, _) => OnWindowActivity(window));
+        RegionCaptureIntegration.CaptureEnded += Schedule;
     }
 
     private static void OnWindowActivity(Window window)
     {
+        if (RegionCaptureIntegration.IsTrimmingIdleWindow) return;
         if (HoldsImage(window)) Schedule();
     }
 

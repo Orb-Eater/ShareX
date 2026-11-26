@@ -180,6 +180,40 @@ public class EditorCore : IDisposable
     }
 
     /// <summary>
+    /// Configures canvas dimensions for a GPU-backed workspace without materializing a full-size CPU SourceImage.
+    /// </summary>
+    public void SetVirtualCanvasSize(int width, int height)
+    {
+        _liveExpandOriginal?.Dispose();
+        _liveExpandOriginal = null;
+        SourceImage?.Dispose();
+        SourceImage = null;
+        CanvasSize = new SKSize(Math.Max(1, width), Math.Max(1, height));
+        ClearAll(resetHistory: true);
+    }
+
+    /// <summary>
+    /// Releases SourceImage, annotations, and undo history so the editor can be parked and reused cleanly.
+    /// </summary>
+    public void ClearForReuse()
+    {
+        foreach (Annotation annotation in _annotations)
+        {
+            if (annotation is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+
+        _liveExpandOriginal?.Dispose();
+        _liveExpandOriginal = null;
+        SourceImage?.Dispose();
+        SourceImage = null;
+        CanvasSize = default;
+        ClearAll(resetHistory: true);
+    }
+
+    /// <summary>
     /// Load image from file path
     /// </summary>
     public void LoadImage(string filePath)
