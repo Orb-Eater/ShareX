@@ -748,13 +748,18 @@ namespace ShareX
                     if (clipboardPrepTask != null)
                     {
                         // Wait before returning so Image isn't disposed while the background task still reads its pixels,
-                        // and free any uncommitted HGLOBAL handles.
+                        // and still commit the prepared clipboard image even if disk saving threw (matching prior behavior).
                         try
                         {
-                            clipboardPrepTask.GetAwaiter().GetResult()?.Dispose();
+                            using ClipboardHelpers.PreparedClipboardImage prepared = clipboardPrepTask.GetAwaiter().GetResult();
+                            if (prepared != null && ClipboardHelpers.CommitPreparedImage(prepared))
+                            {
+                                DebugHelper.WriteLine("Image copied to clipboard.");
+                            }
                         }
-                        catch
+                        catch (Exception ex)
                         {
+                            DebugHelper.WriteException(ex, "Concurrent clipboard copy image failed.");
                         }
                     }
                 }

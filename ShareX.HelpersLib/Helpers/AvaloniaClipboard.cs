@@ -93,10 +93,9 @@ internal static class AvaloniaClipboard
         {
             return DesktopServices.Run(() =>
             {
+                IntPtr owner = DesktopServices.GetWindow().TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
                 handed = true;
-                return WindowsClipboard.SetImageHandles(
-                    DesktopServices.GetWindow().TryGetPlatformHandle()?.Handle ?? IntPtr.Zero,
-                    pngHandle, dibHandle, htmlHandle, stillWanted);
+                return WindowsClipboard.SetImageHandles(owner, pngHandle, dibHandle, htmlHandle, stillWanted);
             });
         }
         finally

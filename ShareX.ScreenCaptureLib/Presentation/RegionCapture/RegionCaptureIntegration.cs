@@ -57,10 +57,12 @@ public static class RegionCaptureIntegration
 
     // Pre-warmed hidden window reused across captures to avoid per-hotkey visual tree + HWND + swapchain construction.
     private static RegionCaptureWindow? _parkedWindow;
+    private static RegionCaptureWindow? _trimmingWindow;
     private static CultureInfo? _parkedWindowCulture;
     private static string? _parkedWindowScreens;
     private static Avalonia.Styling.ThemeVariant? _parkedWindowTheme;
     private static int _openCaptures;
+    private static bool _isShutdown;
 
     /// <summary>True while a real capture overlay is open. Warm-up runs do not count.</summary>
     public static bool IsCaptureOpen => _openCaptures > 0;
@@ -71,11 +73,20 @@ public static class RegionCaptureIntegration
     /// <summary>Raised on the UI thread when a real (non-prewarm) region capture finishes so idle memory release can schedule.</summary>
     public static event Action? CaptureEnded;
 
+    private static void CloseWindowQuietly(RegionCaptureWindow? window)
+    {
+        if (window != null && !window.IsPermanentlyClosed)
+        {
+            window.AllowReuse = false;
+            try { window.Close(); } catch { }
+        }
+    }
+
     private static void CreateSpareWindow()
     {
         try
         {
-            if (_parkedWindow == null && !IsCaptureOpen)
+            if (_parkedWindow == null && !IsCaptureOpen && !IsTrimmingIdleWindow && !_isShutdown)
             {
                 _parkedWindowCulture = CultureInfo.CurrentUICulture;
                 _parkedWindowScreens = GetScreenSetup();
@@ -94,12 +105,15 @@ public static class RegionCaptureIntegration
     {
         void CloseParked()
         {
+            _isShutdown = true;
             RegionCaptureWindow? parked = _parkedWindow;
+            RegionCaptureWindow? trimming = _trimmingWindow;
             _parkedWindow = null;
-            if (parked != null && !parked.IsPermanentlyClosed)
+            _trimmingWindow = null;
+            CloseWindowQuietly(parked);
+            if (!ReferenceEquals(trimming, parked))
             {
-                parked.AllowReuse = false;
-                try { parked.Close(); } catch { }
+                CloseWindowQuietly(trimming);
             }
         }
 
@@ -119,9 +133,17 @@ public static class RegionCaptureIntegration
     /// </summary>
     public static async Task TrimParkedWindowForIdleAsync()
     {
-        if (!Dispatcher.UIThread.CheckAccess() || IsCaptureOpen) return;
+        if (!Dispatcher.UIThread.CheckAccess() || IsCaptureOpen || IsTrimmingIdleWindow || _isShutdown) return;
         RegionCaptureWindow? parked = _parkedWindow;
         if (parked == null || parked.IsPermanentlyClosed || parked.IsVisible) return;
+
+        // Detach the parked window while awaiting the 1x1 trim render so a capture hotkey triggered mid-await
+        // cannot race on the same window instance, while keeping _trimmingWindow visible to Shutdown/Release.
+        CultureInfo? culture = _parkedWindowCulture;
+        string? screens = _parkedWindowScreens;
+        Avalonia.Styling.ThemeVariant? theme = _parkedWindowTheme;
+        _parkedWindow = null;
+        _trimmingWindow = parked;
         IsTrimmingIdleWindow = true;
         try
         {
@@ -129,7 +151,25 @@ public static class RegionCaptureIntegration
         }
         finally
         {
+            bool stillOwned = ReferenceEquals(_trimmingWindow, parked);
+            if (stillOwned)
+            {
+                _trimmingWindow = null;
+            }
             IsTrimmingIdleWindow = false;
+
+            if (stillOwned && !_isShutdown && !parked.IsPermanentlyClosed &&
+                parked.TryGetPlatformHandle() != null && _parkedWindow == null && !IsCaptureOpen)
+            {
+                _parkedWindow = parked;
+                _parkedWindowCulture = culture;
+                _parkedWindowScreens = screens;
+                _parkedWindowTheme = theme;
+            }
+            else
+            {
+                CloseWindowQuietly(parked);
+            }
         }
     }
 
@@ -141,12 +181,13 @@ public static class RegionCaptureIntegration
     {
         if (!Dispatcher.UIThread.CheckAccess() || IsCaptureOpen) return;
         RegionCaptureWindow? parked = _parkedWindow;
-        if (parked == null) return;
+        RegionCaptureWindow? trimming = _trimmingWindow;
         _parkedWindow = null;
-        if (!parked.IsPermanentlyClosed)
+        _trimmingWindow = null;
+        CloseWindowQuietly(parked);
+        if (!ReferenceEquals(trimming, parked))
         {
-            parked.AllowReuse = false;
-            try { parked.Close(); } catch { }
+            CloseWindowQuietly(trimming);
         }
     }
 
@@ -278,8 +319,8 @@ public static class RegionCaptureIntegration
 
                 if (!request.Prewarm) LogCaptureEnd(window.EndReason, result, start, reused);
 
-                // Park the warm hidden window for the next capture unless another capture already took the slot or it was closed.
-                if (!window.IsPermanentlyClosed && window.TryGetPlatformHandle() != null && _parkedWindow == null)
+                // Park the warm hidden window for the next capture unless another capture already took the slot or shutdown ran.
+                if (!_isShutdown && !window.IsPermanentlyClosed && window.TryGetPlatformHandle() != null && _parkedWindow == null)
                 {
                     _parkedWindow = window;
                     _parkedWindowCulture = currentCulture;

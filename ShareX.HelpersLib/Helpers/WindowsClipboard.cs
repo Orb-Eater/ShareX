@@ -112,6 +112,7 @@ internal static class WindowsClipboard
 
     public static unsafe IntPtr AllocHGlobal(ReadOnlySpan<byte> data)
     {
+        if (data.IsEmpty) return IntPtr.Zero;
         IntPtr handle = NativeMethods.GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)data.Length);
         if (handle == IntPtr.Zero) throw new Win32Exception();
         try
