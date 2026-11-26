@@ -287,6 +287,7 @@ public static unsafe class DxgiDesktopCapturer
         DisposeAllLocked();
 
         _factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
+        HashSet<Rectangle> seenBounds = [];
         for (uint ai = 0; _factory.EnumAdapters1(ai, out IDXGIAdapter1 adapter).Success; ai++)
         {
             List<OutputSlot> adapterOutputs = [];
@@ -305,6 +306,10 @@ public static unsafe class DxgiDesktopCapturer
                         desc.DesktopCoordinates.Right,
                         desc.DesktopCoordinates.Bottom);
                     if (bounds.Width <= 0 || bounds.Height <= 0) continue;
+
+                    // Deduplicate mirrored/cloned outputs sharing identical desktop coordinates so
+                    // coveredArea never double-counts and parallel readback never writes the same region twice.
+                    if (!seenBounds.Add(bounds)) continue;
 
                     bool isHdr = false;
                     try
@@ -575,6 +580,8 @@ public static unsafe class DxgiDesktopCapturer
             slot.LastFrameTexture.Description.Height != desc.Height)
         {
             slot.LastFrameTexture?.Dispose();
+            slot.LastFrameTexture = null;
+            slot.HasInitialFrame = false;
             slot.StagingTexture?.Dispose();
             slot.StagingTexture = null;
             slot.TexWidth = w;
@@ -656,7 +663,7 @@ public static unsafe class DxgiDesktopCapturer
             foreach (OutputSlot slot in slots)
             {
                 Rectangle inter = Rectangle.Intersect(captureRect, slot.Bounds);
-                if (inter.IsEmpty) continue;
+                if (inter.Width <= 0 || inter.Height <= 0) continue;
                 coveredArea += (long)inter.Width * inter.Height;
 
                 int localX = inter.X - slot.Bounds.X;
@@ -701,6 +708,11 @@ public static unsafe class DxgiDesktopCapturer
 
     internal static SKBitmap ReadbackGpuTilesSubrect(Rectangle virtualBounds, IReadOnlyList<DxgiGpuOutputTile> tiles, Rectangle localCropRect)
     {
+        if (localCropRect.Width <= 0 || localCropRect.Height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(localCropRect), "Crop rectangle must have positive width and height.");
+        }
+
         Rectangle captureRect = new(
             virtualBounds.X + localCropRect.X,
             virtualBounds.Y + localCropRect.Y,
@@ -721,10 +733,11 @@ public static unsafe class DxgiDesktopCapturer
 
                 foreach (DxgiGpuOutputTile tile in tiles)
                 {
+                    // System.Drawing.Rectangle.Intersect returns a 0-width/0-height non-Empty rectangle when
+                    // captureRect touches an adjacent monitor's seam; require positive area on both axes.
                     Rectangle inter = Rectangle.Intersect(captureRect, tile.Bounds);
-                    if (inter.IsEmpty) continue;
+                    if (inter.Width <= 0 || inter.Height <= 0) continue;
                     if (tile.Adapter.Device == null || tile.Adapter.Context == null) continue;
-                    coveredArea += (long)inter.Width * inter.Height;
 
                     int localX = inter.X - tile.Bounds.X;
                     int localY = inter.Y - tile.Bounds.Y;
@@ -733,6 +746,9 @@ public static unsafe class DxgiDesktopCapturer
 
                     int boxW = srcBox.Right - srcBox.Left;
                     int boxH = srcBox.Bottom - srcBox.Top;
+                    if (boxW <= 0 || boxH <= 0) continue;
+
+                    coveredArea += (long)inter.Width * inter.Height;
 
                     // Each intersecting tile gets its own reusable staging texture slot on the adapter so multi-monitor crops
                     // never overwrite or dispose an earlier tile's staging texture before ExecuteMappedReadbackJobs maps them.
@@ -760,9 +776,10 @@ public static unsafe class DxgiDesktopCapturer
                 bitmap.NotifyPixelsChanged();
                 return bitmap;
             }
-            catch
+            catch (Exception ex)
             {
                 bitmap.Dispose();
+                HandleCaptureExceptionLocked(ex);
                 throw;
             }
         }
@@ -771,6 +788,12 @@ public static unsafe class DxgiDesktopCapturer
     internal static void ReadGpuTilesPixelPatch(Rectangle virtualBounds, IReadOnlyList<DxgiGpuOutputTile> tiles,
         int left, int top, int patchWidth, int patchHeight, Span<uint> destBgra)
     {
+        if (patchWidth <= 0 || patchHeight <= 0) return;
+        if (destBgra.Length < (long)patchWidth * patchHeight)
+        {
+            throw new ArgumentException("Destination buffer is smaller than the requested pixel patch.", nameof(destBgra));
+        }
+
         destBgra.Fill(0xFF000000u);
         Rectangle patchRect = new(virtualBounds.X + left, virtualBounds.Y + top, patchWidth, patchHeight);
 
@@ -779,7 +802,7 @@ public static unsafe class DxgiDesktopCapturer
             foreach (DxgiGpuOutputTile tile in tiles)
             {
                 Rectangle inter = Rectangle.Intersect(patchRect, tile.Bounds);
-                if (inter.IsEmpty) continue;
+                if (inter.Width <= 0 || inter.Height <= 0) continue;
                 if (tile.Adapter.Device == null || tile.Adapter.Context == null) continue;
 
                 int localX = inter.X - tile.Bounds.X;
@@ -788,30 +811,39 @@ public static unsafe class DxgiDesktopCapturer
                     tile.TexWidth, tile.TexHeight, tile.Rotation);
                 int boxW = srcBox.Right - srcBox.Left;
                 int boxH = srcBox.Bottom - srcBox.Top;
-
-                ID3D11Texture2D staging = tile.Adapter.EnsurePatchStagingTexture(boxW, boxH);
-                ID3D11DeviceContext ctx = tile.Adapter.Context;
-                ctx.CopySubresourceRegion(staging, 0, 0, 0, 0, tile.Texture, 0, srcBox);
-                if (ctx.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None, out MappedSubresource mapped).Failure)
-                {
-                    continue;
-                }
+                if (boxW <= 0 || boxH <= 0) continue;
 
                 try
                 {
-                    fixed (uint* dstBase = destBgra)
+                    ID3D11Texture2D staging = tile.Adapter.EnsurePatchStagingTexture(boxW, boxH);
+                    ID3D11DeviceContext ctx = tile.Adapter.Context;
+                    ctx.CopySubresourceRegion(staging, 0, 0, 0, 0, tile.Texture, 0, srcBox);
+                    if (ctx.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None, out MappedSubresource mapped).Failure)
                     {
-                        CopyRotatedSubrect(
-                            (byte*)mapped.DataPointer, (int)mapped.RowPitch,
-                            0, 0, boxW, boxH,
-                            (byte*)dstBase, patchWidth * 4,
-                            inter.X - patchRect.X, inter.Y - patchRect.Y,
-                            tile.Rotation, parallel: false);
+                        continue;
+                    }
+
+                    try
+                    {
+                        fixed (uint* dstBase = destBgra)
+                        {
+                            CopyRotatedSubrect(
+                                (byte*)mapped.DataPointer, (int)mapped.RowPitch,
+                                0, 0, boxW, boxH,
+                                (byte*)dstBase, patchWidth * 4,
+                                inter.X - patchRect.X, inter.Y - patchRect.Y,
+                                tile.Rotation, parallel: false);
+                        }
+                    }
+                    finally
+                    {
+                        ctx.Unmap(staging, 0);
                     }
                 }
-                finally
+                catch (SharpGen.Runtime.SharpGenException ex)
                 {
-                    ctx.Unmap(staging, 0);
+                    HandleCaptureExceptionLocked(ex);
+                    return;
                 }
             }
         }
@@ -849,6 +881,8 @@ public static unsafe class DxgiDesktopCapturer
 
     private static void ExecuteMappedReadbackJobs(List<ReadbackJob> jobs, IntPtr dstBaseInt, int dstStride)
     {
+        if (jobs.Count == 0) return;
+
         List<(ReadbackJob job, MappedSubresource mapped)> mappedList = new(jobs.Count);
         try
         {
@@ -1259,6 +1293,12 @@ public static unsafe class DxgiDesktopCapturer
 
         public ID3D11Texture2D EnsureSubrectStagingTexture(int slotIndex, int width, int height)
         {
+            if (width <= 0 || height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(width <= 0 ? nameof(width) : nameof(height),
+                    "Staging texture dimensions must be positive.");
+            }
+
             while (_subrectStagings.Count <= slotIndex)
             {
                 _subrectStagings.Add((null!, 0, 0));
@@ -1270,9 +1310,11 @@ public static unsafe class DxgiDesktopCapturer
                 return entry.Tex;
             }
 
-            entry.Tex?.Dispose();
             int newW = Math.Max(width, entry.W);
             int newH = Math.Max(height, entry.H);
+            entry.Tex?.Dispose();
+            _subrectStagings[slotIndex] = (null!, 0, 0);
+
             ID3D11Texture2D tex = Device!.CreateTexture2D(new Texture2DDescription
             {
                 Width = (uint)newW,
@@ -1292,6 +1334,12 @@ public static unsafe class DxgiDesktopCapturer
 
         public ID3D11Texture2D EnsurePatchStagingTexture(int width, int height)
         {
+            if (width <= 0 || height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(width <= 0 ? nameof(width) : nameof(height),
+                    "Patch staging texture dimensions must be positive.");
+            }
+
             int targetW = Math.Max(64, width);
             int targetH = Math.Max(64, height);
             if (_patchStaging != null && _patchW >= targetW && _patchH >= targetH)
@@ -1299,13 +1347,17 @@ public static unsafe class DxgiDesktopCapturer
                 return _patchStaging;
             }
 
+            int newW = Math.Max(targetW, _patchW);
+            int newH = Math.Max(targetH, _patchH);
             _patchStaging?.Dispose();
-            _patchW = Math.Max(targetW, _patchW);
-            _patchH = Math.Max(targetH, _patchH);
-            _patchStaging = Device!.CreateTexture2D(new Texture2DDescription
+            _patchStaging = null;
+            _patchW = 0;
+            _patchH = 0;
+
+            ID3D11Texture2D tex = Device!.CreateTexture2D(new Texture2DDescription
             {
-                Width = (uint)_patchW,
-                Height = (uint)_patchH,
+                Width = (uint)newW,
+                Height = (uint)newH,
                 MipLevels = 1,
                 ArraySize = 1,
                 Format = Format.B8G8R8A8_UNorm,
@@ -1315,7 +1367,10 @@ public static unsafe class DxgiDesktopCapturer
                 CPUAccessFlags = CpuAccessFlags.Read,
                 MiscFlags = ResourceOptionFlags.None
             });
-            return _patchStaging;
+            _patchStaging = tex;
+            _patchW = newW;
+            _patchH = newH;
+            return tex;
         }
 
         public void ReleaseTransientResourcesAndTrim()
@@ -1391,6 +1446,7 @@ public static unsafe class DxgiDesktopCapturer
             }
 
             StagingTexture?.Dispose();
+            StagingTexture = null;
             StagingTexture = Adapter.Device!.CreateTexture2D(new Texture2DDescription
             {
                 Width = (uint)TexWidth,
@@ -1507,6 +1563,11 @@ public sealed class DxgiGpuDesktopSnapshot : IDisposable
     public unsafe SKBitmap ReadPixelPatchToBitmap(int left, int top, int width, int height)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (width <= 0 || height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(width <= 0 ? nameof(width) : nameof(height),
+                "Pixel patch dimensions must be positive.");
+        }
         SKBitmap patch = new(new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Unpremul));
         IntPtr ptr = patch.GetPixels();
         if (ptr != IntPtr.Zero)

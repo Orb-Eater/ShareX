@@ -105,9 +105,12 @@ public static class RegionCaptureTasks
             : CaptureHelpers.GetScreenBounds();
 
         DxgiGpuDesktopSnapshot? gpuSnapshot = DxgiDesktopCapturer.TryCaptureGpuSnapshot(screenBounds);
-        SKBitmap? frozenScreenshot = gpuSnapshot == null
-            ? (options.ActiveMonitorMode ? screenshot.CaptureActiveMonitor() : screenshot.CaptureFullscreen())
-            : null;
+        SKBitmap? frozenScreenshot = null;
+        if (gpuSnapshot == null)
+        {
+            screenshot.UseDxgi = false;
+            frozenScreenshot = options.ActiveMonitorMode ? screenshot.CaptureActiveMonitor() : screenshot.CaptureFullscreen();
+        }
 
         AvaloniaRegionCaptureRequest request = new AvaloniaRegionCaptureRequest
         {

@@ -89,6 +89,7 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
     private bool _bindingAttempted;
     private bool _retired;
     private SKBitmap? _softwareFallbackBitmap;
+    private SKImage? _softwareFallbackImage;
 
     public DxgiAngleSurfaceSource(DxgiGpuDesktopSnapshot snapshot)
     {
@@ -97,7 +98,7 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
         foreach (DxgiGpuOutputTile tile in snapshot.Tiles)
         {
             System.Drawing.Rectangle inter = System.Drawing.Rectangle.Intersect(snapshot.VirtualBounds, tile.Bounds);
-            if (!inter.IsEmpty)
+            if (inter.Width > 0 && inter.Height > 0)
             {
                 covered += (long)inter.Width * inter.Height;
             }
@@ -129,6 +130,8 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
                 _bindings = null;
             }
 
+            _softwareFallbackImage?.Dispose();
+            _softwareFallbackImage = null;
             _softwareFallbackBitmap?.Dispose();
             _softwareFallbackBitmap = null;
         }
@@ -340,14 +343,23 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
             }
 
             // Software Skia or non-ANGLE fallback: read back once on demand so software targets never draw black.
+            // Cache the SKImage wrapper so GPU-backed canvases avoid re-uploading the full desktop texture every frame.
             try
             {
-                _softwareFallbackBitmap ??= _snapshot.ReadbackFullBitmap();
-                using SKImage? img = SKImage.FromBitmap(_softwareFallbackBitmap);
-                if (img != null)
+                if (_softwareFallbackImage == null)
+                {
+                    if (_softwareFallbackBitmap == null)
+                    {
+                        _softwareFallbackBitmap = _snapshot.ReadbackFullBitmap();
+                        _softwareFallbackBitmap.SetImmutable();
+                    }
+                    _softwareFallbackImage = SKImage.FromBitmap(_softwareFallbackBitmap);
+                }
+
+                if (_softwareFallbackImage != null)
                 {
                     SKRect rect = new(0, 0, Width, Height);
-                    lease.SkCanvas.DrawImage(img, rect, rect, sampling, paint);
+                    lease.SkCanvas.DrawImage(_softwareFallbackImage, rect, rect, sampling, paint);
                 }
             }
             catch (Exception ex)
@@ -471,6 +483,13 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
         catch (Exception ex)
         {
             DebugHelper.WriteException(ex, "Zero-copy D3D11->ANGLE texture bind failed; falling back to CPU readback.");
+            try
+            {
+                lease.GrContext.ResetContext(GRGlBackendState.TextureBinding);
+            }
+            catch
+            {
+            }
             foreach (TileBinding b in bindings)
             {
                 PendingCleanup.Enqueue(b);

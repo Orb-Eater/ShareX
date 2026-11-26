@@ -790,7 +790,18 @@ public partial class RegionCaptureWindow : Window
             _gpuSurfaceSource = surface;
             _editorWorkspace.LoadWorkspaceDirectSurface(
                 surface,
-                materializeCpuSource: () => _gpuSnapshot?.ReadbackFullBitmap(),
+                materializeCpuSource: () =>
+                {
+                    try
+                    {
+                        return _gpuSnapshot?.ReadbackFullBitmap();
+                    }
+                    catch (Exception ex)
+                    {
+                        DebugHelper.WriteException(ex, "DXGI GPU snapshot full readback failed.");
+                        return null;
+                    }
+                },
                 onCpuSourceMaterialized: PromotePendingCursorToAnnotation);
             _workspaceOwnsScreenshot = true;
         }
@@ -1005,13 +1016,20 @@ public partial class RegionCaptureWindow : Window
 
     private void ActivateAnnotationTool()
     {
-        if (_request?.EnableAnnotations != true)
+        if (_closing || _request?.EnableAnnotations != true)
         {
             return;
         }
 
         // Materialize CPU bitmap & promote any deferred cursor overlay once the user enters annotation mode.
-        _editorWorkspace.EnsureCpuWorkspaceImage();
+        if (!_editorWorkspace.EnsureCpuWorkspaceImage())
+        {
+            // Permanently close instead of parking so mid-SelectTool callers (e.g. Emoji/Image) detach from
+            // this ViewModel and never leave a stale modal/file picker on a reused window or keep a lost swapchain.
+            AllowReuse = false;
+            CancelCapture("the selected area could not be read");
+            return;
+        }
         PromotePendingCursorToAnnotation();
 
         _regionToolActive = false;
@@ -2195,7 +2213,7 @@ public partial class RegionCaptureWindow : Window
         foreach (DrawingRectangle lastRegion in lastRegions)
         {
             DrawingRectangle screenRectangle = DrawingRectangle.Intersect(lastRegion, _request.ScreenBounds);
-            if (!screenRectangle.IsEmpty)
+            if (screenRectangle.Width > 0 && screenRectangle.Height > 0)
             {
                 regions.Add(new Rect(
                     screenRectangle.X - _request.ScreenBounds.X,
@@ -2284,7 +2302,15 @@ public partial class RegionCaptureWindow : Window
         if (_gpuSnapshot != null && !_editorWorkspace.HasCpuWorkspaceImage && !_editorWorkspace.HasWorkspaceAnnotations)
         {
             // Fast zero-CPU-overhead path: read back ONLY the cropped rectangle directly from the frozen GPU tiles.
-            output = _gpuSnapshot.ReadbackSubrect(bounds);
+            try
+            {
+                output = _gpuSnapshot.ReadbackSubrect(bounds);
+            }
+            catch (Exception ex)
+            {
+                DebugHelper.WriteException(ex, "DXGI GPU snapshot readback failed.");
+                output = null;
+            }
         }
         else
         {

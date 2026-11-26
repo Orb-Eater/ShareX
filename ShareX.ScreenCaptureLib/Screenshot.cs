@@ -39,6 +39,7 @@ namespace ShareX.ScreenCaptureLib
         public int ShadowOffset { get; set; } = 20;
         public bool AutoHideTaskbar { get; set; } = false;
         public bool HDRScreenshotColorCorrection { get; set; } = false;
+        public bool UseDxgi { get; set; } = true;
 
         public Bitmap CaptureRectangle(Rectangle rect)
         {
@@ -110,13 +111,13 @@ namespace ShareX.ScreenCaptureLib
             return CaptureRectangle(bounds);
         }
 
-        private Bitmap CaptureRectangleNative(Rectangle rect, bool captureCursor = false)
+        private Bitmap CaptureRectangleNative(Rectangle rect, bool captureCursor = false, bool allowDxgi = true)
         {
             IntPtr handle = NativeMethods.GetDesktopWindow();
-            return CaptureRectangleNative(handle, rect, captureCursor);
+            return CaptureRectangleNative(handle, rect, captureCursor, allowDxgi);
         }
 
-        private Bitmap CaptureRectangleNative(IntPtr handle, Rectangle rect, bool captureCursor = false)
+        private Bitmap CaptureRectangleNative(IntPtr handle, Rectangle rect, bool captureCursor = false, bool allowDxgi = true)
         {
             if (rect.Width == 0 || rect.Height == 0)
             {
@@ -152,7 +153,7 @@ namespace ShareX.ScreenCaptureLib
                 return bitmap;
             }
 
-            if (handle == NativeMethods.GetDesktopWindow())
+            if (allowDxgi && UseDxgi && handle == NativeMethods.GetDesktopWindow())
             {
                 Bitmap dxgiBitmap = DxgiDesktopCapturer.TryCaptureToBitmap(rect, allowHdrOutputs: false);
                 if (dxgiBitmap != null)

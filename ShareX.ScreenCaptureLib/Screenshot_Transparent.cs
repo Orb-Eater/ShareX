@@ -83,13 +83,13 @@ namespace ShareX.ScreenCaptureLib
                             return CaptureWindow(handle);
                         }
                         FlushCaptureBackground();
-                        whiteBackground = CaptureRectangleNative(rect);
+                        whiteBackground = CaptureRectangleNative(rect, allowDxgi: false);
                         window.SetBackground(Color.Black, rect);
                         FlushCaptureBackground();
-                        blackBackground = CaptureRectangleNative(rect);
+                        blackBackground = CaptureRectangleNative(rect, allowDxgi: false);
                         window.SetBackground(Color.White, rect);
                         FlushCaptureBackground();
-                        whiteBackground2 = CaptureRectangleNative(rect);
+                        whiteBackground2 = CaptureRectangleNative(rect, allowDxgi: false);
                     }
 
                     Bitmap transparentImage;
