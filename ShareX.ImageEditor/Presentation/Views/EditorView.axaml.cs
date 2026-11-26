@@ -87,6 +87,8 @@ namespace ShareX.ImageEditor.Presentation.Views
         private CursorAssetLoader.CustomCursorKind? _interactionCursorAsset;
         private ContentControl _builtInToolbarsHost = null!;
         private EditorBuiltInToolbars? _builtInToolbars;
+        private Func<SKBitmap?>? _materializeCpuSource;
+        private Action? _onCpuSourceMaterialized;
 
         // Window-level key handler reference (so shortcuts work regardless of focus)
         private Window? _parentWindow;
@@ -977,6 +979,175 @@ namespace ShareX.ImageEditor.Presentation.Views
             }
         }
 
+        /// <summary>True when at least one annotation exists in the workspace.</summary>
+        public bool HasWorkspaceAnnotations
+        {
+            get
+            {
+                if (_editorCore.Annotations.Count > 0) return true;
+                var canvas = this.FindControl<Canvas>("AnnotationCanvas");
+                return canvas != null && canvas.Children.Count > 0;
+            }
+        }
+
+        /// <summary>True while the workspace holds a CPU SourceImage bitmap.</summary>
+        public bool HasCpuWorkspaceImage => _editorCore.SourceImage != null;
+
+        /// <summary>
+        /// Re-attaches the editor view to a replacement <see cref="MainViewModel"/> while already loaded
+        /// (for example when a reused fullscreen capture window switches from prewarm options to user options).
+        /// </summary>
+        public void RebindWorkspaceViewModel(MainViewModel vm)
+        {
+            ArgumentNullException.ThrowIfNull(vm);
+            DataContext = vm;
+            if (IsLoaded)
+            {
+                AttachViewModel(vm);
+                _editorCore.ActiveTool = vm.ActiveTool;
+                _zoomController.InitLastZoom(vm.Zoom);
+                UpdateCursorForTool();
+            }
+        }
+
+        /// <summary>
+        /// Loads a zero-copy GPU/direct surface into the fullscreen workspace without materializing a CPU bitmap.
+        /// If an operation later needs CPU pixels (annotation effect, Ctrl+C copy, or snapshot), <paramref name="materializeCpuSource"/>
+        /// is invoked lazily once and <paramref name="onCpuSourceMaterialized"/> runs immediately after.
+        /// </summary>
+        public void LoadWorkspaceDirectSurface(IDirectSurfaceSource surface, Func<SKBitmap?>? materializeCpuSource = null, Action? onCpuSourceMaterialized = null)
+        {
+            ArgumentNullException.ThrowIfNull(surface);
+
+            if (_canvasControl == null)
+            {
+                throw new InvalidOperationException("The editor workspace must be initialized before loading a surface.");
+            }
+
+            _materializeCpuSource = materializeCpuSource;
+            _onCpuSourceMaterialized = onCpuSourceMaterialized;
+            _suppressNextHistoryDirtyMark = true;
+            _canvasControl.ShowDirectSurface(surface);
+            _editorCore.SetVirtualCanvasSize(surface.Width, surface.Height);
+
+            if (DataContext is MainViewModel vm)
+            {
+                vm.SyncImageDimensions(surface.Width, surface.Height);
+                vm.Zoom = 1.0;
+                vm.IsDirty = false;
+                vm.HasAnnotations = false;
+                vm.UpdateCoreHistoryState(false, false);
+            }
+        }
+
+        /// <summary>
+        /// Materializes the CPU workspace bitmap on demand when the workspace was opened with a zero-copy GPU surface.
+        /// Upgrades the canvas to show the materialized CPU bitmap directly so software render targets (RenderTargetBitmap)
+        /// and CPU effect annotations see the exact pixels.
+        /// </summary>
+        public bool EnsureCpuWorkspaceImage()
+        {
+            if (_editorCore.SourceImage != null)
+            {
+                return true;
+            }
+
+            Func<SKBitmap?>? materializer = _materializeCpuSource;
+            if (materializer == null)
+            {
+                return false;
+            }
+
+            Action? onMaterialized = _onCpuSourceMaterialized;
+            _materializeCpuSource = null;
+            _onCpuSourceMaterialized = null;
+
+            SKBitmap? bitmap = materializer();
+            if (bitmap == null)
+            {
+                return false;
+            }
+
+            _suppressNextHistoryDirtyMark = true;
+            bool direct = false;
+            if (_canvasControl != null)
+            {
+                try
+                {
+                    _canvasControl.ShowDirectly(bitmap);
+                    direct = true;
+                }
+                catch (Exception ex)
+                {
+                    EditorServices.ReportWarning(nameof(EditorView), "Could not draw materialized workspace image directly; using a copy.", ex);
+                }
+
+                if (!direct)
+                {
+                    _canvasControl.Initialize(bitmap.Width, bitmap.Height);
+                }
+            }
+
+            _editorCore.LoadImage(bitmap);
+            if (!direct)
+            {
+                RenderCore();
+            }
+
+            onMaterialized?.Invoke();
+
+            if (DataContext is MainViewModel vm)
+            {
+                vm.SyncImageDimensions(bitmap.Width, bitmap.Height);
+                vm.IsDirty = false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Clears the loaded capture image, GPU surface, annotations, selection, and effect caches so a fullscreen
+        /// capture host window can be hidden and reused without rebuilding the visual tree or swapchain.
+        /// </summary>
+        public void ResetWorkspaceForReuse()
+        {
+            if (_workspaceDisposed)
+            {
+                return;
+            }
+
+            _pendingAutoCopyImageVersion++;
+            _materializeCpuSource = null;
+            _onCpuSourceMaterialized = null;
+            _cancelPendingImageInsertion?.Invoke();
+            CancelActiveInteractionOrSelection();
+            ClearEffectPreviewCache();
+            ReleaseAnnotationDisplayBitmaps();
+
+            if (this.FindControl<Canvas>("AnnotationCanvas") is { } annotationCanvas)
+            {
+                annotationCanvas.Children.Clear();
+            }
+
+            _selectionController.ClearSelection();
+            this.FindControl<SpotlightOverlayControl>("SpotlightOverlayControl")?.UpdateSpotlights([], null, 1, 1);
+
+            _suppressNextHistoryDirtyMark = true;
+            _canvasControl?.ClearSource();
+            _editorCore.ClearForReuse();
+
+            if (DataContext is MainViewModel vm)
+            {
+                vm.IsDirty = false;
+                vm.HasAnnotations = false;
+                vm.HasSelectedAnnotation = false;
+                vm.SelectedAnnotation = null;
+                vm.UpdateCoreHistoryState(false, false);
+                vm.DismissNotification();
+                vm.RecalculateNumberCounter(_editorCore.Annotations);
+            }
+        }
+
         /// <summary>
         /// Loads an owned bitmap directly into the shared workspace without creating the
         /// normal editor preview and backup copies. This is intended for very large,
@@ -992,6 +1163,8 @@ namespace ShareX.ImageEditor.Presentation.Views
                 throw new InvalidOperationException("The editor workspace must be initialized before loading an image.");
             }
 
+            _materializeCpuSource = null;
+            _onCpuSourceMaterialized = null;
             _suppressNextHistoryDirtyMark = true;
             // RenderCore goes back to the copy if the image is replaced.
             bool direct = false;

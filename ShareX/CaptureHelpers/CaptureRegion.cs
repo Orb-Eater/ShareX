@@ -28,6 +28,7 @@ using ShareX.ImageEditor.Integration;
 using ShareX.ScreenCaptureLib;
 using ShareX.ScreenCaptureLib.Presentation.RegionCapture;
 using SkiaSharp;
+using System;
 using System.Drawing;
 using System.Threading.Tasks;
 using Bitmap = SkiaSharp.SKBitmap;
@@ -65,9 +66,34 @@ namespace ShareX
                 ? CaptureHelpers.GetActiveScreenBounds()
                 : CaptureHelpers.GetScreenBounds();
 
-            SKBitmap frozenScreenshot = activeMonitorMode
-                ? screenshot.CaptureActiveMonitor()
-                : screenshot.CaptureFullscreen();
+            DxgiGpuDesktopSnapshot gpuSnapshot = null;
+            SKBitmap frozenScreenshot = null;
+
+            // Zero-copy GPU desktop snapshot: avoids 48 MB CPU readback when opening the region overlay.
+            if (!taskSettings.CaptureSettings.HDRScreenshotColorCorrection)
+            {
+                gpuSnapshot = DxgiDesktopCapturer.TryCaptureGpuSnapshot(screenBounds);
+            }
+
+            if (gpuSnapshot == null)
+            {
+                try
+                {
+                    frozenScreenshot = activeMonitorMode
+                        ? screenshot.CaptureActiveMonitor()
+                        : screenshot.CaptureFullscreen();
+                }
+                catch when (_prewarm)
+                {
+                    // On lock screen / UAC / isolated desktop during startup prewarm, still warm the overlay pipeline.
+                    frozenScreenshot = new SKBitmap(new SKImageInfo(
+                        Math.Max(1, screenBounds.Width),
+                        Math.Max(1, screenBounds.Height),
+                        SKColorType.Bgra8888,
+                        SKAlphaType.Opaque));
+                    frozenScreenshot.Erase(SKColors.Black);
+                }
+            }
 
             SKBitmap cursorBitmap = null;
             Point cursorPosition = Point.Empty;
@@ -77,11 +103,18 @@ namespace ShareX
                 CursorData cursorData = new CursorData();
                 if (cursorData.IsVisible)
                 {
-                    using Bitmap cursor = cursorData.ToBitmap(frozenScreenshot, screenBounds.Location);
-                    cursorBitmap = cursor.Copy();
                     cursorPosition = new Point(
                         cursorData.DrawPosition.X - screenBounds.X,
                         cursorData.DrawPosition.Y - screenBounds.Y);
+
+                    if (gpuSnapshot != null)
+                    {
+                        cursorBitmap = CaptureCursorFromGpuSnapshot(cursorData, gpuSnapshot, cursorPosition);
+                    }
+                    else if (frozenScreenshot != null)
+                    {
+                        cursorBitmap = cursorData.ToBitmap(frozenScreenshot, screenBounds.Location);
+                    }
                 }
             }
 
@@ -89,7 +122,8 @@ namespace ShareX
             {
                 Prewarm = _prewarm,
                 Screenshot = frozenScreenshot,
-                // Screen captures are opaque: WindowsImageInterop.Capture and HDR correction set alpha to 255.
+                GpuSnapshot = gpuSnapshot,
+                // Screen captures are opaque: DXGI, WindowsImageInterop.Capture, and HDR correction set alpha to 255.
                 ScreenshotIsOpaque = true,
                 ScreenBounds = screenBounds,
                 // The window writes some values back to these options, and a warm-up must not change saved settings.
@@ -109,23 +143,36 @@ namespace ShareX
                 return null;
             }
 
-            using (result.Image)
+            // Result owns a freshly cropped bitmap; transfer ownership directly without a redundant full-image Copy().
+            TaskMetadata metadata = new TaskMetadata(result.Image);
+
+            if (result.ImageModified)
             {
-                Bitmap output = result.Image.Copy();
-                TaskMetadata metadata = new TaskMetadata(output);
-
-                if (result.ImageModified)
-                {
-                    AllowAnnotation = false;
-                }
-
-                if (result.WindowInfo != null)
-                {
-                    metadata.UpdateInfo(result.WindowInfo);
-                }
-
-                return metadata;
+                AllowAnnotation = false;
             }
+
+            if (result.WindowInfo != null)
+            {
+                metadata.UpdateInfo(result.WindowInfo);
+            }
+
+            return metadata;
+        }
+
+        private static SKBitmap CaptureCursorFromGpuSnapshot(CursorData cursorData, DxgiGpuDesktopSnapshot gpuSnapshot, Point localPosition)
+        {
+            Size iconSize = cursorData.Size.IsEmpty ? WindowsImageInterop.GetIconSize(cursorData.Handle) : cursorData.Size;
+            if (iconSize.IsEmpty)
+            {
+                return cursorData.ToBitmap();
+            }
+
+            using SKBitmap patch = gpuSnapshot.ReadPixelPatchToBitmap(
+                localPosition.X,
+                localPosition.Y,
+                iconSize.Width,
+                iconSize.Height);
+            return cursorData.ToBitmap(patch, cursorData.DrawPosition);
         }
     }
 }

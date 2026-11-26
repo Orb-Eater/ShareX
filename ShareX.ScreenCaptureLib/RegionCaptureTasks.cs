@@ -41,15 +41,7 @@ public static class RegionCaptureTasks
     public static async Task<Bitmap?> GetRegionImageAsync(RegionCaptureOptions? options = null)
     {
         AvaloniaRegionCaptureResult? result = await CaptureAsync(options);
-        if (result == null)
-        {
-            return null;
-        }
-
-        using (result.Image)
-        {
-            return result.Image.Copy();
-        }
+        return result?.Image;
     }
 
     public static async Task<(Bitmap Image, Rectangle Rectangle)?> GetRegionImageWithRectangleAsync(
@@ -61,10 +53,7 @@ public static class RegionCaptureTasks
             return null;
         }
 
-        using (result.Image)
-        {
-            return (result.Image.Copy(), result.ScreenRectangle);
-        }
+        return (result.Image, result.ScreenRectangle);
     }
 
     public static async Task<(Rectangle Rectangle, WindowInfo? WindowInfo)?> GetRectangleRegionAsync(
@@ -115,14 +104,16 @@ public static class RegionCaptureTasks
             ? CaptureHelpers.GetActiveScreenBounds()
             : CaptureHelpers.GetScreenBounds();
 
-        SKBitmap frozenScreenshot = options.ActiveMonitorMode
-            ? screenshot.CaptureActiveMonitor()
-            : screenshot.CaptureFullscreen();
+        DxgiGpuDesktopSnapshot? gpuSnapshot = DxgiDesktopCapturer.TryCaptureGpuSnapshot(screenBounds);
+        SKBitmap? frozenScreenshot = gpuSnapshot == null
+            ? (options.ActiveMonitorMode ? screenshot.CaptureActiveMonitor() : screenshot.CaptureFullscreen())
+            : null;
 
         AvaloniaRegionCaptureRequest request = new AvaloniaRegionCaptureRequest
         {
             Screenshot = frozenScreenshot,
-            // Screen captures are opaque: WindowsImageInterop.Capture and HDR correction set alpha to 255.
+            GpuSnapshot = gpuSnapshot,
+            // Screen captures are opaque: DXGI, WindowsImageInterop.Capture, and HDR correction set alpha to 255.
             ScreenshotIsOpaque = true,
             ScreenBounds = screenBounds,
             RegionCaptureOptions = options,

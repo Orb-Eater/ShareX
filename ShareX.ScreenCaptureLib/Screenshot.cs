@@ -152,6 +152,28 @@ namespace ShareX.ScreenCaptureLib
                 return bitmap;
             }
 
+            if (handle == NativeMethods.GetDesktopWindow())
+            {
+                Bitmap dxgiBitmap = DxgiDesktopCapturer.TryCaptureToBitmap(rect, allowHdrOutputs: false);
+                if (dxgiBitmap != null)
+                {
+                    if (captureCursor)
+                    {
+                        try
+                        {
+                            CursorData cursorData = new CursorData();
+                            cursorData.DrawCursor(dxgiBitmap, rect.Location);
+                        }
+                        catch (Exception e)
+                        {
+                            DebugHelper.WriteException(e, "Cursor capture failed.");
+                        }
+                    }
+
+                    return dxgiBitmap;
+                }
+            }
+
             return CaptureRectangleGDI(handle, rect, captureCursor);
         }
 

@@ -168,21 +168,31 @@ public static class WindowsImageInterop
         }
     }
 
-    public static SKBitmap FromIcon(IntPtr icon, Size size = default, SKBitmap background = null, Point position = default)
+    public static Size GetIconSize(IntPtr icon)
     {
-        if (icon == IntPtr.Zero) return null;
-        if (size.IsEmpty && NativeMethods.GetIconInfo(icon, out IconInfo info))
+        if (icon == IntPtr.Zero) return Size.Empty;
+        if (NativeMethods.GetIconInfo(icon, out IconInfo info))
         {
             try
             {
                 Size maskSize = GetBitmapSize(info.hbmColor != IntPtr.Zero ? info.hbmColor : info.hbmMask);
-                size = new Size(maskSize.Width, info.hbmColor != IntPtr.Zero ? maskSize.Height : maskSize.Height / 2);
+                return new Size(maskSize.Width, info.hbmColor != IntPtr.Zero ? maskSize.Height : maskSize.Height / 2);
             }
             finally
             {
                 if (info.hbmColor != IntPtr.Zero) NativeMethods.DeleteObject(info.hbmColor);
                 if (info.hbmMask != IntPtr.Zero) NativeMethods.DeleteObject(info.hbmMask);
             }
+        }
+        return Size.Empty;
+    }
+
+    public static SKBitmap FromIcon(IntPtr icon, Size size = default, SKBitmap background = null, Point position = default)
+    {
+        if (icon == IntPtr.Zero) return null;
+        if (size.IsEmpty)
+        {
+            size = GetIconSize(icon);
         }
         if (size.IsEmpty) return null;
         Action<IntPtr> draw = dc => NativeMethods.DrawIconEx(dc, 0, 0, icon, size.Width, size.Height, 0, IntPtr.Zero, NativeConstants.DI_NORMAL);

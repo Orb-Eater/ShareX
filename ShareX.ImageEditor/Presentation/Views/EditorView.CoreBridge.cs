@@ -81,8 +81,8 @@ namespace ShareX.ImageEditor.Presentation.Views
 
             if (_canvasControl.HasDirectSource)
             {
-                // The canvas shows the source image's own pixels, which nothing changes in place.
-                if (_canvasControl.IsDirectSource(_editorCore.SourceImage)) return;
+                // The canvas shows either a GPU surface (SourceImage == null) or the source image's own pixels.
+                if (_editorCore.SourceImage == null || _canvasControl.IsDirectSource(_editorCore.SourceImage)) return;
 
                 // The image was replaced: draw it into the canvas's own copy as usual.
                 _canvasControl.Initialize((int)_editorCore.CanvasSize.Width, (int)_editorCore.CanvasSize.Height);
@@ -109,6 +109,7 @@ namespace ShareX.ImageEditor.Presentation.Views
 
         public SkiaSharp.SKBitmap? GetSource()
         {
+            EnsureCpuWorkspaceImage();
             if (_editorCore.SourceImage != null)
             {
                 return _editorCore.SourceImage.Copy();
@@ -119,6 +120,7 @@ namespace ShareX.ImageEditor.Presentation.Views
 
         public SkiaSharp.SKBitmap? GetSnapshot()
         {
+            EnsureCpuWorkspaceImage();
             if (_editorCore.SourceImage == null) return null;
 
             var previewFrame = this.FindControl<Border>("PreviewFrame");
@@ -200,6 +202,7 @@ namespace ShareX.ImageEditor.Presentation.Views
         /// </summary>
         public SkiaSharp.SKBitmap? GetSnapshot(Rect sourceRectangle)
         {
+            EnsureCpuWorkspaceImage();
             SkiaSharp.SKBitmap? sourceImage = _editorCore.SourceImage;
             if (sourceImage == null)
             {
@@ -227,17 +230,7 @@ namespace ShareX.ImageEditor.Presentation.Views
 
             if (_editorCore.Annotations.Count == 0)
             {
-                SkiaSharp.SKBitmap output = new(new SkiaSharp.SKImageInfo(
-                    width,
-                    height,
-                    sourceImage.ColorType,
-                    sourceImage.AlphaType));
-                using SkiaSharp.SKCanvas canvas = new(output);
-                canvas.DrawBitmap(
-                    sourceImage,
-                    new SkiaSharp.SKRect(left, top, right, bottom),
-                    new SkiaSharp.SKRect(0, 0, width, height));
-                return output;
+                return CopySubrectFast(sourceImage, left, top, width, height);
             }
 
             Border? previewFrame = this.FindControl<Border>("PreviewFrame");
@@ -286,6 +279,70 @@ namespace ShareX.ImageEditor.Presentation.Views
                 previewFrame.InvalidateMeasure();
                 previewFrame.InvalidateArrange();
             }
+        }
+
+        private static unsafe SkiaSharp.SKBitmap CopySubrectFast(SkiaSharp.SKBitmap sourceImage, int left, int top, int width, int height)
+        {
+            SkiaSharp.SKBitmap output = new(new SkiaSharp.SKImageInfo(
+                width,
+                height,
+                sourceImage.ColorType,
+                sourceImage.AlphaType));
+
+            IntPtr srcBase = sourceImage.GetPixels();
+            IntPtr dstBase = output.GetPixels();
+            int bpp = sourceImage.BytesPerPixel;
+
+            if (srcBase != IntPtr.Zero && dstBase != IntPtr.Zero && bpp > 0 && bpp == output.BytesPerPixel)
+            {
+                int srcStride = sourceImage.RowBytes;
+                int dstStride = output.RowBytes;
+                long copyBytes = (long)width * bpp;
+                long srcLeftBytes = (long)left * bpp;
+
+                if (height >= 512 && (long)width * height >= 1_000_000)
+                {
+                    int bands = Math.Min(8, Math.Max(2, height / 128));
+                    Parallel.For(0, bands, band =>
+                    {
+                        int y0 = height * band / bands;
+                        int y1 = height * (band + 1) / bands;
+                        byte* sb = (byte*)srcBase;
+                        byte* db = (byte*)dstBase;
+                        for (int y = y0; y < y1; y++)
+                        {
+                            Buffer.MemoryCopy(
+                                sb + (long)(top + y) * srcStride + srcLeftBytes,
+                                db + (long)y * dstStride,
+                                dstStride,
+                                copyBytes);
+                        }
+                    });
+                }
+                else
+                {
+                    byte* sb = (byte*)srcBase;
+                    byte* db = (byte*)dstBase;
+                    for (int y = 0; y < height; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            sb + (long)(top + y) * srcStride + srcLeftBytes,
+                            db + (long)y * dstStride,
+                            dstStride,
+                            copyBytes);
+                    }
+                }
+
+                output.NotifyPixelsChanged();
+                return output;
+            }
+
+            using SkiaSharp.SKCanvas canvas = new(output);
+            canvas.DrawBitmap(
+                sourceImage,
+                new SkiaSharp.SKRect(left, top, left + width, top + height),
+                new SkiaSharp.SKRect(0, 0, width, height));
+            return output;
         }
 
         public Task<Bitmap?> RenderSnapshot()
@@ -419,6 +476,7 @@ namespace ShareX.ImageEditor.Presentation.Views
                 // Converting PreviewImage to a fresh SKBitmap on every drag frame is the
                 // main difference from the creation path and causes the lag seen after
                 // an effect annotation has been created.
+                EnsureCpuWorkspaceImage();
                 var sourceBitmap = _editorCore.SourceImage;
 
                 if (sourceBitmap == null && vm.PreviewImage != null)

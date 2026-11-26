@@ -37,6 +37,17 @@ using SkiaSharp;
 namespace ShareX.ImageEditor.Presentation.Controls;
 
 /// <summary>
+/// Platform-supplied direct visual surface (such as a zero-copy GPU shared texture) drawn by <see cref="SKCanvasControl"/>
+/// without uploading a CPU bitmap to the backing store.
+/// </summary>
+public interface IDirectSurfaceSource : IDisposable
+{
+    int Width { get; }
+    int Height { get; }
+    void Render(ImmediateDrawingContext context, BitmapInterpolationMode interpolationMode, BitmapBlendingMode blendingMode, EdgeMode edgeMode);
+}
+
+/// <summary>
 /// A control that allows direct SkiaSharp rendering into a WriteableBitmap.
 /// This acts as the high-performance raster layer.
 /// </summary>
@@ -44,16 +55,46 @@ public class SKCanvasControl : Control, IDisposable
 {
     private WriteableBitmap? _bitmap;
     private DirectSource? _direct;
+    private IDirectSurfaceSource? _directSurface;
     private object _lock = new object();
 
-    /// <summary>True while a bitmap is shown by <see cref="ShowDirectly"/> instead of the backing store.</summary>
-    public bool HasDirectSource => _direct != null;
+    /// <summary>True while a bitmap or direct surface is shown instead of the backing store.</summary>
+    public bool HasDirectSource => _direct != null || _directSurface != null;
+
+    /// <summary>True while a custom GPU/direct surface is shown via <see cref="ShowDirectSurface"/>.</summary>
+    public bool HasDirectSurface => _directSurface != null;
 
     /// <summary>
     /// True when <paramref name="bitmap"/> is the very bitmap shown by <see cref="ShowDirectly"/>.
     /// Only compares references: the bitmap itself may already be disposed by its owner.
     /// </summary>
     public bool IsDirectSource(SKBitmap? bitmap) => bitmap != null && ReferenceEquals(_direct?.Bitmap, bitmap);
+
+    /// <summary>
+    /// Shows a platform-supplied direct surface (e.g. zero-copy GPU desktop snapshot) instead of a CPU backing store.
+    /// Ownership of <paramref name="surface"/> transfers to this control.
+    /// </summary>
+    public void ShowDirectSurface(IDirectSurfaceSource surface)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+
+        DirectSource? oldDirect;
+        IDirectSurfaceSource? oldSurface;
+
+        lock (_lock)
+        {
+            _bitmap?.Dispose();
+            _bitmap = null;
+            oldDirect = _direct;
+            _direct = null;
+            oldSurface = _directSurface;
+            _directSurface = surface;
+        }
+
+        RetireDisposable(oldDirect);
+        RetireDisposable(oldSurface);
+        InvalidateVisual();
+    }
 
     /// <summary>
     /// Shows a bitmap straight from its own pixels instead of a copy in the backing store.
@@ -66,6 +107,7 @@ public class SKCanvasControl : Control, IDisposable
 
         DirectSource direct = new(bitmap);
         DirectSource? old;
+        IDirectSurfaceSource? oldSurface;
 
         lock (_lock)
         {
@@ -73,9 +115,33 @@ public class SKCanvasControl : Control, IDisposable
             _bitmap = null;
             old = _direct;
             _direct = direct;
+            oldSurface = _directSurface;
+            _directSurface = null;
         }
 
-        RetireDirectSource(old);
+        RetireDisposable(old);
+        RetireDisposable(oldSurface);
+        InvalidateVisual();
+    }
+
+    /// <summary>Releases any active direct source or backing bitmap without disposing the control itself.</summary>
+    public void ClearSource()
+    {
+        DirectSource? oldDirect;
+        IDirectSurfaceSource? oldSurface;
+
+        lock (_lock)
+        {
+            _bitmap?.Dispose();
+            _bitmap = null;
+            oldDirect = _direct;
+            _direct = null;
+            oldSurface = _directSurface;
+            _directSurface = null;
+        }
+
+        RetireDisposable(oldDirect);
+        RetireDisposable(oldSurface);
         InvalidateVisual();
     }
 
@@ -86,25 +152,36 @@ public class SKCanvasControl : Control, IDisposable
     {
         if (width <= 0 || height <= 0) return;
 
+        DirectSource? oldDirect;
+        IDirectSurfaceSource? oldSurface;
+
         lock (_lock)
         {
-            RetireDirectSource(_direct);
+            oldDirect = _direct;
             _direct = null;
+            oldSurface = _directSurface;
+            _directSurface = null;
 
             if (_bitmap?.PixelSize.Width == width && _bitmap?.PixelSize.Height == height)
+            {
+                RetireDisposable(oldDirect);
+                RetireDisposable(oldSurface);
                 return;
+            }
 
             _bitmap?.Dispose();
             // Create a WriteableBitmap with Bgra8888 which is standard for Skia/Avalonia interop
             _bitmap = new WriteableBitmap(new PixelSize(width, height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
         }
 
+        RetireDisposable(oldDirect);
+        RetireDisposable(oldSurface);
         InvalidateVisual();
     }
 
     // A scene already sent to the render thread may still draw the old source, and drawing a disposed one leaves
     // the area black for a frame. Dispose it once the next frame, which no longer uses it, has been rendered.
-    private void RetireDirectSource(DirectSource? source)
+    private void RetireDisposable(IDisposable? source)
     {
         if (source == null) return;
 
@@ -130,7 +207,11 @@ public class SKCanvasControl : Control, IDisposable
 
     public override void Render(DrawingContext context)
     {
-        if (_direct != null)
+        if (_directSurface != null)
+        {
+            context.Custom(new DirectSurfaceDrawOperation(_directSurface, this));
+        }
+        else if (_direct != null)
         {
             context.Custom(new DirectDrawOperation(_direct, this));
         }
@@ -186,6 +267,8 @@ public class SKCanvasControl : Control, IDisposable
         // At once: the owner is closing, and the pixel memory is large.
         _direct?.Dispose();
         _direct = null;
+        _directSurface?.Dispose();
+        _directSurface = null;
     }
 
     /// <summary>
@@ -311,6 +394,46 @@ public class SKCanvasControl : Control, IDisposable
                 SKRect rect = new(0, 0, _source.Width, _source.Height);
                 lease.SkCanvas.DrawImage(image, rect, rect, sampling, paint);
             }
+        }
+    }
+
+    private sealed class DirectSurfaceDrawOperation : ICustomDrawOperation
+    {
+        private readonly IDirectSurfaceSource _surface;
+        private readonly BitmapInterpolationMode _interpolationMode;
+        private readonly BitmapBlendingMode _blendingMode;
+        private readonly EdgeMode _edgeMode;
+
+        public DirectSurfaceDrawOperation(IDirectSurfaceSource surface, Visual visual)
+        {
+            _surface = surface;
+
+            for (Visual? current = visual; current != null; current = current.GetVisualParent())
+            {
+                BitmapInterpolationMode interpolationMode = RenderOptions.GetBitmapInterpolationMode(current);
+                if (interpolationMode != BitmapInterpolationMode.Unspecified) _interpolationMode = interpolationMode;
+
+                BitmapBlendingMode blendingMode = RenderOptions.GetBitmapBlendingMode(current);
+                if (blendingMode != BitmapBlendingMode.Unspecified) _blendingMode = blendingMode;
+
+                EdgeMode edgeMode = RenderOptions.GetEdgeMode(current);
+                if (edgeMode != EdgeMode.Unspecified) _edgeMode = edgeMode;
+            }
+        }
+
+        public Rect Bounds => new(0, 0, _surface.Width, _surface.Height);
+
+        public bool HitTest(Point p) => Bounds.Contains(p);
+
+        public bool Equals(ICustomDrawOperation? other) => false;
+
+        public void Dispose()
+        {
+        }
+
+        public void Render(ImmediateDrawingContext context)
+        {
+            _surface.Render(context, _interpolationMode, _blendingMode, _edgeMode);
         }
     }
 }

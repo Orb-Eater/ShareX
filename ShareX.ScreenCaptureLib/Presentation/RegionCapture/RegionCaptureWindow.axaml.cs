@@ -57,17 +57,42 @@ namespace ShareX.ScreenCaptureLib.Presentation.RegionCapture;
 
 public partial class RegionCaptureWindow : Window
 {
-    private readonly TaskCompletionSource<AvaloniaRegionCaptureResult?> _completionSource =
+    private TaskCompletionSource<AvaloniaRegionCaptureResult?> _completionSource =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private AvaloniaRegionCaptureRequest? _request;
     private AvaloniaRegionCaptureResult? _pendingResult;
+    private DxgiGpuDesktopSnapshot? _gpuSnapshot;
+    private DxgiAngleSurfaceSource? _gpuSurfaceSource;
+    private SKBitmap? _pendingCursorBitmap;
+    private DrawingPoint _pendingCursorPosition;
+    private WriteableBitmap? _cursorOverlayBitmap;
+    private bool _cursorPromotedToAnnotation;
+    private bool _workspaceInitializedOnce;
+    private bool _hasOpenedOnce;
+    private bool _isPermanentlyClosed;
+    private bool _lockCursorToWindow;
+    private int _sessionGeneration;
+    private bool _toolbarItemsInitialized;
+    private string? _lastToolbarFingerprint;
+    private int _lastMagnifierSize = -1;
+    private bool _lastUseSquareMagnifier;
+
+    /// <summary>When true, completing or cancelling hides and resets the window so the next capture reuses its visual tree and swapchain.</summary>
+    internal bool AllowReuse { get; set; }
+
+    /// <summary>True after this window has completed its first <see cref="Window.Opened"/> cycle.</summary>
+    internal bool HasOpenedOnce => _hasOpenedOnce;
+
+    /// <summary>True once <see cref="OnClosed"/> has permanently destroyed this window.</summary>
+    internal bool IsPermanentlyClosed => _isPermanentlyClosed;
 
     /// <summary>How the capture ended, for the log. Stays at its default when the window was closed from outside.</summary>
     internal string EndReason { get; private set; } = "the window was closed";
     private EditorView _editorWorkspace = null!;
     private MainViewModel? _viewModel;
     private Grid _regionInputSurface = null!;
+    private Image _capturedCursorImage = null!;
     private RegionSelectionOverlay _regionOverlay = null!;
     private AvaloniaCanvas _regionResizeNodeCanvas = null!;
     private LayoutTransformControl _regionTransform = null!;
@@ -122,6 +147,9 @@ public partial class RegionCaptureWindow : Window
         Topmost = true;
 #endif
         ResolveControls();
+        Opened += OnOpened;
+        Activated += OnWindowActivatedForCursorLock;
+        Deactivated += OnWindowDeactivatedForCursorLock;
         AddHandler(PointerPressedEvent, OnCaptureHostPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         AddHandler(PointerMovedEvent, OnCaptureHostPointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
         AddHandler(PointerReleasedEvent, OnCaptureHostPointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -132,19 +160,55 @@ public partial class RegionCaptureWindow : Window
         Bind(request);
     }
 
-    /// <summary>Attaches a capture to a window built earlier. A window takes one capture only.</summary>
+    /// <summary>Attaches a capture request to a new or parked window.</summary>
     internal void Bind(AvaloniaRegionCaptureRequest request)
     {
         RequestedThemeVariant = ThemeManager.GetCurrentTheme();
         _request = request ?? throw new ArgumentNullException(nameof(request));
+        _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingResult = null;
+        _startupException = null;
+        _closing = false;
+        _keyboardInputEnabled = false;
+        _workspaceOwnsScreenshot = false;
+        _cursorPromotedToAnnotation = false;
+        _gpuSnapshot = request.GpuSnapshot;
+        _gpuSurfaceSource = null;
+        _pendingCursorBitmap = request.CursorBitmap;
+        _pendingCursorPosition = request.CursorPosition;
+        EndReason = "the window was closed";
+        _sessionGeneration++;
+
         _imageWidth = Math.Max(1, request.ScreenBounds.Width);
         _imageHeight = Math.Max(1, request.ScreenBounds.Height);
-        if (request.RegionCaptureOptions.ActiveMonitorMode && !request.Prewarm)
-        {
-            Helpers.LockCursorToWindow(this);
-        }
+        _lockCursorToWindow = request.RegionCaptureOptions.ActiveMonitorMode && !request.Prewarm;
+
+        _windows = Array.Empty<SimpleWindowInfo>();
+        _regions.Clear();
+        _hoverCandidate = null;
+        _selectedCandidate = null;
+        _interaction = RegionInteraction.None;
+        _resizeNode = null;
+        _suppressNextRightButtonReleaseAction = false;
+        _annotationMiddleButtonPressed = false;
+        _annotationRightButtonPressed = false;
+        _draggingCaptureToolbar = false;
+        _captureToolbarCenterX = double.NaN;
+        _captureToolbarTop = double.NaN;
+        _positionedCaptureToolbarSize = default;
+        _regionToolActive = true;
+        ResetCreationModifiers();
+
+        _regionOverlay.Regions = [];
+        _regionOverlay.SelectionRectangle = default;
+        _regionOverlay.HoverRectangle = default;
+        _regionOverlay.IsSelectionPending = false;
+        _regionOverlay.ShowHoverWithSelection = false;
+        _regionResizeNodeCanvas.IsVisible = false;
+        _selectionInfoPanel.IsVisible = false;
+        _captureToolbar.Classes.Set("hidden", false);
+
         InitializeCaptureWorkspace();
-        Opened += OnOpened;
     }
 
     public Task<AvaloniaRegionCaptureResult?> CaptureAsync()
@@ -162,18 +226,70 @@ public partial class RegionCaptureWindow : Window
             _editorWorkspace.Focusable = false;
             _regionInputSurface.Focusable = false;
         }
+        else
+        {
+#if !DEBUG
+            Topmost = true;
+#endif
+            ShowActivated = true;
+            _editorWorkspace.Focusable = true;
+            _regionInputSurface.Focusable = true;
+        }
 
         ConfigureInitialPixelBounds();
-        Show();
+
+        if (_hasOpenedOnce)
+        {
+            // Load the new capture texture/surface before Show() so the first visible frame has fresh pixels (zero stale flash).
+            UpdatePixelTransforms();
+            LoadCaptureContentIntoWorkspace();
+            Show();
+            _ = BeginCaptureSessionAsync();
+        }
+        else
+        {
+            Show();
+        }
+
         return _completionSource.Task;
+    }
+
+    private void OnWindowActivatedForCursorLock(object? sender, EventArgs e)
+    {
+        if (!_lockCursorToWindow || _closing) return;
+        IntPtr handle = TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        if (OperatingSystem.IsWindows() && handle != IntPtr.Zero)
+        {
+            DrawingRectangle bounds = NativeMethods.GetWindowRect(handle);
+            if (bounds.Width > 0 && bounds.Height > 0)
+            {
+                NativeMethods.ClipCursor(new RECT(bounds));
+            }
+        }
+    }
+
+    private void OnWindowDeactivatedForCursorLock(object? sender, EventArgs e)
+    {
+        if (OperatingSystem.IsWindows() && _lockCursorToWindow)
+        {
+            NativeMethods.ClipCursor(IntPtr.Zero);
+        }
     }
 
     protected override void OnClosed(EventArgs e)
     {
+        _isPermanentlyClosed = true;
         Exception? closeException = _startupException;
 
         try
         {
+            if (OperatingSystem.IsWindows() && _lockCursorToWindow)
+            {
+                NativeMethods.ClipCursor(IntPtr.Zero);
+                _lockCursorToWindow = false;
+            }
+
+            ReleaseSessionResources(forPermanentClose: true);
             _magnifierBitmap?.Dispose();
             _magnifierBitmap = null;
             _captureToolbar.LayoutUpdated -= OnCaptureToolbarLayoutUpdated;
@@ -185,17 +301,9 @@ public partial class RegionCaptureWindow : Window
                 _viewModel.ToolSelectionRequested -= OnAnnotationToolSelected;
             }
 
-            if (_workspaceOwnsScreenshot)
-            {
-                _editorWorkspace.DisposeWorkspace();
-            }
-            else
-            {
-                _request?.Screenshot.Dispose();
-            }
-
+            _editorWorkspace.DisposeWorkspace();
             _viewModel?.Dispose();
-            _request?.CursorBitmap?.Dispose();
+            _viewModel = null;
         }
         catch (Exception ex)
         {
@@ -213,6 +321,114 @@ public partial class RegionCaptureWindow : Window
             }
 
             base.OnClosed(e);
+        }
+    }
+
+    private void ReleaseSessionResources(bool forPermanentClose)
+    {
+        _capturedCursorImage.IsVisible = false;
+        _capturedCursorImage.Source = null;
+        _cursorOverlayBitmap?.Dispose();
+        _cursorOverlayBitmap = null;
+
+        // Synchronously detach ANGLE surface before disposing the underlying D3D11 shared snapshot.
+        _gpuSurfaceSource?.MarkRetired();
+        _gpuSurfaceSource = null;
+
+        if (!forPermanentClose)
+        {
+            _editorWorkspace.ResetWorkspaceForReuse();
+        }
+
+        if (!_workspaceOwnsScreenshot)
+        {
+            _request?.Screenshot?.Dispose();
+        }
+
+        _gpuSnapshot?.Dispose();
+        _gpuSnapshot = null;
+
+        if (!_cursorPromotedToAnnotation)
+        {
+            _pendingCursorBitmap?.Dispose();
+        }
+        _pendingCursorBitmap = null;
+        _request = null;
+    }
+
+    private void FinishOrParkSession()
+    {
+        if (OperatingSystem.IsWindows() && _lockCursorToWindow)
+        {
+            NativeMethods.ClipCursor(IntPtr.Zero);
+            _lockCursorToWindow = false;
+        }
+
+        if (!AllowReuse || _isPermanentlyClosed)
+        {
+            Close();
+            return;
+        }
+
+        AvaloniaRegionCaptureResult? result = _pendingResult;
+        Exception? error = _startupException;
+        _pendingResult = null;
+        _startupException = null;
+        _keyboardInputEnabled = false;
+        _sessionGeneration++;
+
+        try
+        {
+            Hide();
+            ReleaseSessionResources(forPermanentClose: false);
+        }
+        catch (Exception ex)
+        {
+            error ??= ex;
+        }
+
+        if (error != null)
+        {
+            _completionSource.TrySetException(error);
+        }
+        else
+        {
+            _completionSource.TrySetResult(result);
+        }
+    }
+
+    /// <summary>
+    /// Shrinks the parked hidden window's ANGLE/D3D11 swapchain from full multi-monitor size (~100 MB commit)
+    /// down to 1x1 off-screen during idle while keeping the XAML visual tree, EditorView, toolbar, and HWND warm.
+    /// </summary>
+    internal async Task TrimSwapchainForIdleAsync()
+    {
+        if (_isPermanentlyClosed || !_hasOpenedOnce || IsVisible || _request != null) return;
+        try
+        {
+            Topmost = false;
+            ShowActivated = false;
+            Position = new PixelPoint(-32000, -32000);
+            Width = 1;
+            Height = 1;
+            Show();
+
+            Compositor? compositor = ElementComposition.GetElementVisual(this)?.Compositor;
+            if (compositor != null)
+            {
+                InvalidateVisual();
+                await Task.WhenAny(compositor.RequestCompositionBatchCommitAsync().Rendered, Task.Delay(500));
+            }
+        }
+        catch
+        {
+        }
+        finally
+        {
+            if (!_isPermanentlyClosed && _request == null)
+            {
+                Hide();
+            }
         }
     }
 
@@ -340,6 +556,7 @@ public partial class RegionCaptureWindow : Window
     {
         _editorWorkspace = this.FindControl<EditorView>("EditorWorkspace")!;
         _regionInputSurface = this.FindControl<Grid>("RegionInputSurface")!;
+        _capturedCursorImage = this.FindControl<Image>("CapturedCursorImage")!;
         _regionOverlay = this.FindControl<RegionSelectionOverlay>("RegionOverlay")!;
         _regionResizeNodeCanvas = this.FindControl<AvaloniaCanvas>("RegionResizeNodeCanvas")!;
         _regionTransform = this.FindControl<LayoutTransformControl>("RegionTransform")!;
@@ -365,41 +582,73 @@ public partial class RegionCaptureWindow : Window
             return;
         }
 
-        _viewModel = new MainViewModel(_request.ImageEditorOptions)
+        if (_viewModel == null || !ReferenceEquals(_viewModel.Options, _request.ImageEditorOptions))
         {
-            ShowFileMenu = false,
-            ShowTaskButtons = false,
-            ShowBottomToolbar = false,
-            ShowToolbars = false,
-            ShowStartScreen = false,
-            UseContinueWorkflow = false
-        };
-        _viewModel.SetHostToolbarItems(_request.EnableAnnotations
-            ? RegionCaptureToolbar.CreateItems(_request.RegionCaptureOptions.ToolbarItems)
-            : []);
-        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        _viewModel.ToolSelectionRequested += OnAnnotationToolSelected;
+            if (_viewModel != null)
+            {
+                _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+                _viewModel.ToolSelectionRequested -= OnAnnotationToolSelected;
+                _viewModel.Dispose();
+            }
 
-        _editorWorkspace.DataContext = _viewModel;
-        _annotationToolbar.DataContext = _viewModel.ToolbarAdapter;
-        _editorWorkspace.AttachHostAnnotationToolbar(_annotationToolbar);
+            _viewModel = new MainViewModel(_request.ImageEditorOptions)
+            {
+                ShowFileMenu = false,
+                ShowTaskButtons = false,
+                ShowBottomToolbar = false,
+                ShowToolbars = false,
+                ShowStartScreen = false,
+                UseContinueWorkflow = false
+            };
+            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+            _viewModel.ToolSelectionRequested += OnAnnotationToolSelected;
+            _toolbarItemsInitialized = false;
+
+            if (_hasOpenedOnce)
+            {
+                _editorWorkspace.RebindWorkspaceViewModel(_viewModel);
+            }
+            else
+            {
+                _editorWorkspace.DataContext = _viewModel;
+            }
+            _annotationToolbar.DataContext = _viewModel.ToolbarAdapter;
+        }
+
+        if (!_workspaceInitializedOnce)
+        {
+            _workspaceInitializedOnce = true;
+            _editorWorkspace.AttachHostAnnotationToolbar(_annotationToolbar);
+            InitializeRegionResizeNodes();
+        }
+
+        var requestedItems = _request.RegionCaptureOptions.ToolbarItems;
+        string toolbarFingerprint = BuildToolbarFingerprint(_request.EnableAnnotations, requestedItems);
+        if (!_toolbarItemsInitialized || !string.Equals(_lastToolbarFingerprint, toolbarFingerprint, StringComparison.Ordinal))
+        {
+            _toolbarItemsInitialized = true;
+            _lastToolbarFingerprint = toolbarFingerprint;
+            _viewModel.SetHostToolbarItems(_request.EnableAnnotations
+                ? RegionCaptureToolbar.CreateItems(requestedItems)
+                : []);
+        }
         _annotationToolbar.IsVisible = _request.EnableAnnotations;
         _annotationToolbar.ShowToolOptions = false;
-
-        if (_request.RegionCaptureOptions.CompactToolbar)
-        {
-            _annotationToolbar.IsCompact = true;
-            _annotationToolbar.MainToolbarCornerRadius = new CornerRadius(3);
-        }
+        _annotationToolbar.IsCompact = _request.RegionCaptureOptions.CompactToolbar;
+        _annotationToolbar.MainToolbarCornerRadius = _request.RegionCaptureOptions.CompactToolbar
+            ? new CornerRadius(3)
+            : new CornerRadius(0, 0, 4, 4);
 
         _regionInputSurface.Width = _imageWidth;
         _regionInputSurface.Height = _imageHeight;
+        _regionInputSurface.IsVisible = true;
+        _regionInputSurface.IsHitTestVisible = true;
+        _regionOverlay.IsVisible = true;
         _regionOverlay.DimAlpha = GetDimAlpha(_request.RegionCaptureOptions);
         _regionOverlay.DimAllExceptSelection = _request.RegionCaptureOptions.DimAllExceptSelection;
         _regionOverlay.ShowCenterCrosshair = _request.RegionCaptureOptions.ShowCenterCrosshair;
         _regionOverlay.ShowCursorCrosshair = _request.RegionCaptureOptions.ShowScreenCrosshair;
         _regionInputSurface.Cursor = CursorAssetLoader.GetCrosshairCursor(GetInitialScaling());
-        InitializeRegionResizeNodes();
 
         _magnifierView.IsVisible = _request.RegionCaptureOptions.ShowMagnifier;
         ApplyMagnifierShape();
@@ -408,6 +657,20 @@ public partial class RegionCaptureWindow : Window
         _regionToolButton.Classes.Set("active", true);
         _viewModel.SetHostToolbarToolsActive(false);
         Title = Localization.Strings.BaseRegionForm_InitializeComponent_Region_capture;
+    }
+
+    private static string BuildToolbarFingerprint(bool enableAnnotations, IReadOnlyList<ShareX.ImageEditor.Integration.ImageEditorToolbarItemOptions>? items)
+    {
+        if (!enableAnnotations) return "disabled";
+        if (items == null || items.Count == 0) return "default";
+        System.Text.StringBuilder sb = new(items.Count * 24);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            sb.Append(item.Id).Append('|').Append(item.BeginGroup).Append('|').Append(item.IsVisible)
+              .Append('|').Append(item.Hotkey).Append('|').Append(item.SecondaryHotkey).Append(';');
+        }
+        return sb.ToString();
     }
 
     private void ApplyMagnifierShape()
@@ -422,13 +685,20 @@ public partial class RegionCaptureWindow : Window
             RegionCaptureOptions.MagnifierSizeMinimum,
             RegionCaptureOptions.MagnifierSizeMaximum);
         options.MagnifierSize = magnifierSize;
+        bool useSquare = options.UseSquareMagnifier;
+        if (_lastMagnifierSize == magnifierSize && _lastUseSquareMagnifier == useSquare)
+        {
+            return;
+        }
+
+        _lastMagnifierSize = magnifierSize;
+        _lastUseSquareMagnifier = useSquare;
         double outerSize = magnifierSize + 2;
 
         Control circleOuter = this.FindControl<Control>("MagnifierCircleOuter")!;
         Control circleInner = this.FindControl<Control>("MagnifierCircleInner")!;
         Control squareOuter = this.FindControl<Control>("MagnifierSquareOuter")!;
         Control squareInner = this.FindControl<Control>("MagnifierSquareInner")!;
-        bool useSquare = options.UseSquareMagnifier;
         circleOuter.IsVisible = !useSquare;
         circleInner.IsVisible = !useSquare;
         squareOuter.IsVisible = useSquare;
@@ -495,6 +765,102 @@ public partial class RegionCaptureWindow : Window
 
     private async void OnOpened(object? sender, EventArgs e)
     {
+        if (_hasOpenedOnce)
+        {
+            return;
+        }
+
+        _hasOpenedOnce = true;
+        _editorWorkspace.ConfigureForFullscreenWorkspace();
+        LoadCaptureContentIntoWorkspace();
+        await BeginCaptureSessionAsync();
+    }
+
+    private void LoadCaptureContentIntoWorkspace()
+    {
+        if (_request == null) return;
+
+        if (_gpuSnapshot != null)
+        {
+            DxgiAngleSurfaceSource surface = new(_gpuSnapshot);
+            _gpuSurfaceSource = surface;
+            _editorWorkspace.LoadWorkspaceDirectSurface(
+                surface,
+                materializeCpuSource: () => _gpuSnapshot?.ReadbackFullBitmap(),
+                onCpuSourceMaterialized: PromotePendingCursorToAnnotation);
+            _workspaceOwnsScreenshot = true;
+        }
+        else if (_request.Screenshot != null)
+        {
+            _editorWorkspace.LoadWorkspaceImage(_request.Screenshot, _request.ScreenshotIsOpaque);
+            _workspaceOwnsScreenshot = true;
+        }
+
+        ApplyPendingCursorOverlay();
+    }
+
+    private unsafe void ApplyPendingCursorOverlay()
+    {
+        _cursorOverlayBitmap?.Dispose();
+        _cursorOverlayBitmap = null;
+
+        if (_pendingCursorBitmap == null || _pendingCursorBitmap.Width <= 0 || _pendingCursorBitmap.Height <= 0)
+        {
+            _capturedCursorImage.Source = null;
+            _capturedCursorImage.IsVisible = false;
+            return;
+        }
+
+        int w = _pendingCursorBitmap.Width;
+        int h = _pendingCursorBitmap.Height;
+        WriteableBitmap wb = new(
+            new PixelSize(w, h),
+            new Vector(96, 96),
+            PixelFormat.Bgra8888,
+            _pendingCursorBitmap.AlphaType == SKAlphaType.Premul ? AlphaFormat.Premul : AlphaFormat.Unpremul);
+
+        using (ILockedFramebuffer fb = wb.Lock())
+        {
+            IntPtr src = _pendingCursorBitmap.GetPixels();
+            if (src != IntPtr.Zero)
+            {
+                int srcStride = _pendingCursorBitmap.RowBytes;
+                int dstStride = fb.RowBytes;
+                long rowBytes = (long)w * 4;
+                byte* sp = (byte*)src;
+                byte* dp = (byte*)fb.Address;
+                for (int y = 0; y < h; y++)
+                {
+                    Buffer.MemoryCopy(sp + (long)y * srcStride, dp + (long)y * dstStride, dstStride, rowBytes);
+                }
+            }
+        }
+
+        _cursorOverlayBitmap = wb;
+        _capturedCursorImage.Source = wb;
+        AvaloniaCanvas.SetLeft(_capturedCursorImage, _pendingCursorPosition.X);
+        AvaloniaCanvas.SetTop(_capturedCursorImage, _pendingCursorPosition.Y);
+        _capturedCursorImage.IsVisible = true;
+    }
+
+    private void PromotePendingCursorToAnnotation()
+    {
+        if (_cursorPromotedToAnnotation || _pendingCursorBitmap == null) return;
+        _cursorPromotedToAnnotation = true;
+
+        _capturedCursorImage.IsVisible = false;
+        _capturedCursorImage.Source = null;
+        _cursorOverlayBitmap?.Dispose();
+        _cursorOverlayBitmap = null;
+
+        _editorWorkspace.InsertWorkspaceImageAnnotation(
+            _pendingCursorBitmap,
+            new Point(_pendingCursorPosition.X, _pendingCursorPosition.Y));
+    }
+
+    private async Task BeginCaptureSessionAsync()
+    {
+        int generation = _sessionGeneration;
         try
         {
             if (_request == null || _viewModel == null)
@@ -506,17 +872,6 @@ public partial class RegionCaptureWindow : Window
             ApplyPixelSize();
             Helpers.EnsureWindowPosition(this, _request.ScreenBounds.X, WindowY);
             UpdatePixelTransforms();
-            _editorWorkspace.ConfigureForFullscreenWorkspace();
-            _editorWorkspace.LoadWorkspaceImage(_request.Screenshot, _request.ScreenshotIsOpaque);
-            _workspaceOwnsScreenshot = true;
-
-            if (_request.CursorBitmap != null)
-            {
-                _editorWorkspace.InsertWorkspaceImageAnnotation(
-                    _request.CursorBitmap,
-                    new Point(_request.CursorPosition.X, _request.CursorPosition.Y));
-                ActivateRegionTool();
-            }
 
             if (!_request.Prewarm)
             {
@@ -532,7 +887,7 @@ public partial class RegionCaptureWindow : Window
             UpdateToolbarPosition(new PixelPoint(cursorPosition.X, cursorPosition.Y));
             UpdateHud(_lastPointerPoint);
 
-            Task windowRegions = LoadWindowRegionsAsync();
+            Task windowRegions = LoadWindowRegionsAsync(generation);
 
             if (_request.Prewarm)
             {
@@ -543,7 +898,10 @@ public partial class RegionCaptureWindow : Window
                 }
 
                 await windowRegions;
-                CancelCapture("warm-up finished");
+                if (generation == _sessionGeneration && !_closing)
+                {
+                    CancelCapture("warm-up finished");
+                }
                 return;
             }
 
@@ -553,7 +911,7 @@ public partial class RegionCaptureWindow : Window
                 await Task.Delay(inputDelay);
             }
 
-            if (!_closing)
+            if (generation == _sessionGeneration && !_closing)
             {
                 _keyboardInputEnabled = true;
             }
@@ -565,7 +923,7 @@ public partial class RegionCaptureWindow : Window
         }
     }
 
-    private async Task LoadWindowRegionsAsync()
+    private async Task LoadWindowRegionsAsync(int generation)
     {
         if (_request == null || !_request.RegionCaptureOptions.DetectWindows)
         {
@@ -587,7 +945,7 @@ public partial class RegionCaptureWindow : Window
             }
 
             IReadOnlyList<SimpleWindowInfo> result = await Task.Run(windows.GetWindowInfoList);
-            if (!_closing)
+            if (generation == _sessionGeneration && !_closing)
             {
                 _windows = result;
                 UpdateHover(_lastPointerPoint);
@@ -647,6 +1005,10 @@ public partial class RegionCaptureWindow : Window
         {
             return;
         }
+
+        // Materialize CPU bitmap & promote any deferred cursor overlay once the user enters annotation mode.
+        _editorWorkspace.EnsureCpuWorkspaceImage();
+        PromotePendingCursorToAnnotation();
 
         _regionToolActive = false;
         SetInteraction(RegionInteraction.None);
@@ -1473,7 +1835,7 @@ public partial class RegionCaptureWindow : Window
         RegionCaptureOptions options = _request.RegionCaptureOptions;
         if (options.UseCustomInfoText)
         {
-            SKColor pixel = _editorWorkspace.GetWorkspacePixel(imageX, imageY);
+            SKColor pixel = SampleWorkspacePixel(imageX, imageY);
             DrawingColor color = DrawingColor.FromArgb(pixel.Alpha, pixel.Red, pixel.Green, pixel.Blue);
 
             if (!string.IsNullOrEmpty(options.CustomInfoText))
@@ -1487,6 +1849,19 @@ public partial class RegionCaptureWindow : Window
         }
 
         return $"X: {screenPosition.X} Y: {screenPosition.Y}";
+    }
+
+    private SKColor SampleWorkspacePixel(int imageX, int imageY)
+    {
+        if (_gpuSnapshot != null && !_editorWorkspace.HasCpuWorkspaceImage)
+        {
+            Span<uint> one = stackalloc uint[1];
+            _gpuSnapshot.ReadPixelPatch(imageX, imageY, 1, 1, one);
+            uint bgra = one[0];
+            return new SKColor((byte)(bgra >> 16), (byte)(bgra >> 8), (byte)bgra, (byte)(bgra >> 24));
+        }
+
+        return _editorWorkspace.GetWorkspacePixel(imageX, imageY);
     }
 
     private unsafe void UpdateMagnifier(Point imagePoint)
@@ -1509,6 +1884,38 @@ public partial class RegionCaptureWindow : Window
 
         using ILockedFramebuffer framebuffer = _magnifierBitmap.Lock();
         byte* destination = (byte*)framebuffer.Address;
+
+        if (_gpuSnapshot != null && !_editorWorkspace.HasCpuWorkspaceImage)
+        {
+            int left = Math.Clamp(centerX - radius, 0, Math.Max(0, _imageWidth - 1));
+            int top = Math.Clamp(centerY - radius, 0, Math.Max(0, _imageHeight - 1));
+            int right = Math.Clamp(centerX + radius + 1, left + 1, _imageWidth);
+            int bottom = Math.Clamp(centerY + radius + 1, top + 1, _imageHeight);
+            int patchW = right - left;
+            int patchH = bottom - top;
+
+            uint[] patch = System.Buffers.ArrayPool<uint>.Shared.Rent(patchW * patchH);
+            try
+            {
+                _gpuSnapshot.ReadPixelPatch(left, top, patchW, patchH, patch.AsSpan(0, patchW * patchH));
+                for (int y = 0; y < count; y++)
+                {
+                    uint* dstRow = (uint*)(destination + y * framebuffer.RowBytes);
+                    int sy = Math.Clamp(centerY + y - radius, left == right ? 0 : top, bottom - 1) - top;
+                    int patchRow = sy * patchW;
+                    for (int x = 0; x < count; x++)
+                    {
+                        int sx = Math.Clamp(centerX + x - radius, left, right - 1) - left;
+                        dstRow[x] = patch[patchRow + sx];
+                    }
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<uint>.Shared.Return(patch);
+            }
+            return;
+        }
 
         for (int y = 0; y < count; y++)
         {
@@ -1860,11 +2267,42 @@ public partial class RegionCaptureWindow : Window
         }
 
         DrawingRectangle bounds = regions.Aggregate(DrawingRectangle.Union);
-        SKBitmap? output = _editorWorkspace.GetSnapshot(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
+        SKBitmap? output;
+
+        if (_gpuSnapshot != null && !_editorWorkspace.HasCpuWorkspaceImage && !_editorWorkspace.HasWorkspaceAnnotations)
+        {
+            // Fast zero-CPU-overhead path: read back ONLY the cropped rectangle directly from the frozen GPU tiles.
+            output = _gpuSnapshot.ReadbackSubrect(bounds);
+        }
+        else
+        {
+            if (!_cursorPromotedToAnnotation && _pendingCursorBitmap != null && _editorWorkspace.HasWorkspaceAnnotations)
+            {
+                PromotePendingCursorToAnnotation();
+            }
+
+            output = _editorWorkspace.GetSnapshot(new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
+        }
+
         if (output == null)
         {
             CancelCapture("the selected area could not be read");
             return;
+        }
+
+        // Composite deferred cursor bitmap onto the cropped image if it wasn't promoted into an editor annotation.
+        if (!_cursorPromotedToAnnotation && _pendingCursorBitmap != null)
+        {
+            DrawingRectangle cursorRect = new(
+                _pendingCursorPosition.X,
+                _pendingCursorPosition.Y,
+                _pendingCursorBitmap.Width,
+                _pendingCursorBitmap.Height);
+            if (cursorRect.IntersectsWith(bounds))
+            {
+                using SKCanvas canvas = new(output);
+                canvas.DrawBitmap(_pendingCursorBitmap, cursorRect.X - bounds.X, cursorRect.Y - bounds.Y);
+            }
         }
 
         if (regions.Count > 1)
@@ -1888,7 +2326,7 @@ public partial class RegionCaptureWindow : Window
         RegionCaptureIntegration.SetLastRegion(screenRectangle, regions.Select(ToScreenRectangle).ToArray());
         EndReason = regions.Count > 1 ? $"{trigger}, {regions.Count} regions" : trigger;
         _closing = true;
-        Close();
+        FinishOrParkSession();
     }
 
     private DrawingRectangle ToScreenRectangle(DrawingRectangle imageRectangle)
@@ -1932,7 +2370,7 @@ public partial class RegionCaptureWindow : Window
         EndReason = reason;
         _closing = true;
         _pendingResult = null;
-        Close();
+        FinishOrParkSession();
     }
 
     private bool HasValidSelection()
