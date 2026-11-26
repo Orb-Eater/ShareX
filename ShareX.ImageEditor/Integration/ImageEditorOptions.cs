@@ -59,10 +59,13 @@ namespace ShareX.ImageEditor.Integration
         public double WindowWidth { get; set; } = 1280;
         public double WindowHeight { get; set; } = 720;
         public bool ShowExitConfirmation { get; set; } = true;
+        public bool AutoSaveOnExit { get; set; } = false;
         public bool ZoomToFitOnOpen { get; set; } = false;
         public bool QuickCrop { get; set; } = true;
         public bool AutoCloseEditorOnTask { get; set; } = false;
         public bool AutoCopyImageToClipboard { get; set; } = false;
+        public bool AutoCopyImageToClipboardOnExit { get; set; } = false;
+        public int RecentCaptureEditorWindowSeconds { get; set; } = 60;
         public bool ShowInsertImageDialog { get; set; } = true;
         public bool ShowNotifications { get; set; } = true;
         /// <summary>

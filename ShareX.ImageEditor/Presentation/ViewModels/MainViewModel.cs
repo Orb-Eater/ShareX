@@ -73,8 +73,33 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
 
         private const string OutputRatioAuto = "Auto";
 
-        [ObservableProperty]
         private bool _isDirty;
+        private bool _hasUnsavedClipboardChanges;
+        private long _clipboardChangeVersion;
+        private int _activeSaveCount;
+        private bool _isClosingWithExitActions;
+
+        public bool IsDirty
+        {
+            get => _isDirty;
+            set
+            {
+                if (value)
+                {
+                    _clipboardChangeVersion++;
+                    _hasUnsavedClipboardChanges = true;
+                }
+                else if (_activeSaveCount == 0)
+                {
+                    _clipboardChangeVersion++;
+                    _hasUnsavedClipboardChanges = false;
+                }
+
+                SetProperty(ref _isDirty, value);
+            }
+        }
+
+        internal bool HasUnsavedClipboardChanges => _hasUnsavedClipboardChanges;
 
         private bool _isSyncingFromCore;
         private bool _zoomToFitOnNextImageLoad;
@@ -144,6 +169,11 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
         [RelayCommand]
         private void Continue()
         {
+            if (_isClosingWithExitActions || _disposed)
+            {
+                return;
+            }
+
             TaskResult = EditorTaskResult.Continue;
             CloseRequested?.Invoke(this, EventArgs.Empty);
         }
@@ -162,6 +192,11 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
 
         public void RequestClose(bool ignoreModal = false)
         {
+            if (_isClosingWithExitActions || _disposed)
+            {
+                return;
+            }
+
             if (IsModalOpen && !ignoreModal)
             {
                 return;
@@ -174,23 +209,47 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
 
             TaskResult = EditorTaskResult.Cancel;
 
+            bool allowExitActions = !UseContinueWorkflow && HasPreviewImage;
+            bool shouldAutoSave = allowExitActions && IsDirty && Options.AutoSaveOnExit && CanSave();
+            bool shouldAutoCopy = allowExitActions && _hasUnsavedClipboardChanges && Options.AutoCopyImageToClipboardOnExit && CanCopy();
+
+            if (shouldAutoSave)
+            {
+                _ = CloseWithExitActionsAsync(saveFirst: true);
+                return;
+            }
+
             if (Options.ShowExitConfirmation && IsDirty)
             {
                 ShowConfirmationDialog();
+                return;
             }
-            else
+
+            if (shouldAutoCopy)
             {
-                CloseRequested?.Invoke(this, EventArgs.Empty);
+                _ = CloseWithExitActionsAsync(saveFirst: false);
+                return;
             }
+
+            CloseRequested?.Invoke(this, EventArgs.Empty);
         }
 
         public void CloseAfterTaskActionIfEnabled()
         {
-            if (Options.AutoCloseEditorOnTask)
+            if (_isClosingWithExitActions || _disposed || !Options.AutoCloseEditorOnTask)
             {
-                TaskResult = EditorTaskResult.Cancel;
-                CloseRequested?.Invoke(this, EventArgs.Empty);
+                return;
             }
+
+            TaskResult = EditorTaskResult.Cancel;
+
+            if (!UseContinueWorkflow && HasPreviewImage && _hasUnsavedClipboardChanges && Options.AutoCopyImageToClipboardOnExit && CanCopy())
+            {
+                _ = CloseWithExitActionsAsync(saveFirst: false);
+                return;
+            }
+
+            CloseRequested?.Invoke(this, EventArgs.Empty);
         }
 
         public void RequestCopyToClipboard()
@@ -198,27 +257,39 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
             _ = RequestCopyToClipboardAsync();
         }
 
-        public Task RequestCopyToClipboardAsync()
+        public async Task RequestCopyToClipboardAsync()
         {
-            return InvokeRequestedHandlersAsync(_copyRequested);
+            if (_copyRequested == null)
+            {
+                return;
+            }
+
+            long version = _clipboardChangeVersion;
+            await InvokeRequestedHandlersAsync(_copyRequested);
+
+            if (_clipboardChangeVersion == version)
+            {
+                _hasUnsavedClipboardChanges = false;
+            }
         }
 
         private void ShowConfirmationDialog()
         {
-            if (IsModalOpen)
+            if (IsModalOpen || _disposed)
             {
                 return;
             }
 
             var dialog = new ConfirmationDialogViewModel(
-                onYes: () => _ = SaveAndCloseAfterConfirmationAsync(),
-                onNo: () =>
-                {
-                    CloseModal();
-                    CloseRequested?.Invoke(this, EventArgs.Empty);
-                },
+                onYes: () => _ = CloseAfterConfirmationAsync(saveFirst: true),
+                onNo: () => _ = CloseAfterConfirmationAsync(saveFirst: false),
                 onCancel: () =>
                 {
+                    if (_isClosingWithExitActions)
+                    {
+                        return;
+                    }
+
                     CloseModal();
                 }
             );
@@ -227,11 +298,106 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
             IsModalOpen = true;
         }
 
-        private async Task SaveAndCloseAfterConfirmationAsync()
+        private async Task CloseWithExitActionsAsync(bool saveFirst)
         {
-            await RequestSaveAsync();
-            CloseModal();
-            CloseRequested?.Invoke(this, EventArgs.Empty);
+            if (_isClosingWithExitActions || _disposed)
+            {
+                return;
+            }
+
+            _isClosingWithExitActions = true;
+            try
+            {
+                if (saveFirst && !UseContinueWorkflow && HasPreviewImage && IsDirty && CanSave())
+                {
+                    try
+                    {
+                        await RequestSaveAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        EditorServices.ReportError(nameof(MainViewModel), "Failed to auto-save image on exit.", ex);
+                    }
+
+                    if (_disposed)
+                    {
+                        return;
+                    }
+
+                    if (IsDirty && Options.ShowExitConfirmation)
+                    {
+                        ShowConfirmationDialog();
+                        return;
+                    }
+                }
+
+                if (!UseContinueWorkflow && HasPreviewImage && _hasUnsavedClipboardChanges && Options.AutoCopyImageToClipboardOnExit && CanCopy())
+                {
+                    try
+                    {
+                        await RequestCopyToClipboardAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        EditorServices.ReportError(nameof(MainViewModel), "Failed to auto-copy image to clipboard on exit.", ex);
+                    }
+                }
+
+                if (!_disposed)
+                {
+                    CloseRequested?.Invoke(this, EventArgs.Empty);
+                }
+            }
+            finally
+            {
+                _isClosingWithExitActions = false;
+            }
+        }
+
+        private async Task CloseAfterConfirmationAsync(bool saveFirst)
+        {
+            if (_isClosingWithExitActions || _disposed)
+            {
+                return;
+            }
+
+            _isClosingWithExitActions = true;
+            try
+            {
+                if (saveFirst && HasPreviewImage && CanSave())
+                {
+                    try
+                    {
+                        await RequestSaveAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        EditorServices.ReportError(nameof(MainViewModel), "Failed to save image before closing.", ex);
+                    }
+                }
+
+                if (!UseContinueWorkflow && !_disposed && HasPreviewImage && _hasUnsavedClipboardChanges && Options.AutoCopyImageToClipboardOnExit && CanCopy())
+                {
+                    try
+                    {
+                        await RequestCopyToClipboardAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        EditorServices.ReportError(nameof(MainViewModel), "Failed to auto-copy image to clipboard on exit.", ex);
+                    }
+                }
+
+                if (!_disposed)
+                {
+                    CloseModal();
+                    CloseRequested?.Invoke(this, EventArgs.Empty);
+                }
+            }
+            finally
+            {
+                _isClosingWithExitActions = false;
+            }
         }
 
         // Export events
@@ -1260,16 +1426,33 @@ namespace ShareX.ImageEditor.Presentation.ViewModels
 
             // Clear annotations as well
             ClearAnnotationsRequested?.Invoke(this, EventArgs.Empty);
+            _hasUnsavedClipboardChanges = false;
         }
 
-        private Task<string?> RequestSaveAsync()
+        private async Task<string?> RequestSaveAsync()
         {
-            return InvokeRequestedHandlersAsync(_saveRequested);
+            _activeSaveCount++;
+            try
+            {
+                return await InvokeRequestedHandlersAsync(_saveRequested);
+            }
+            finally
+            {
+                _activeSaveCount--;
+            }
         }
 
-        private Task<string?> RequestSaveAsAsync()
+        private async Task<string?> RequestSaveAsAsync()
         {
-            return InvokeRequestedHandlersAsync(_saveAsRequested);
+            _activeSaveCount++;
+            try
+            {
+                return await InvokeRequestedHandlersAsync(_saveAsRequested);
+            }
+            finally
+            {
+                _activeSaveCount--;
+            }
         }
 
         [RelayCommand(CanExecute = nameof(CanCopy))]

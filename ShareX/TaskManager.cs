@@ -49,6 +49,70 @@ namespace ShareX
         public static bool IsBusy => Tasks.Count > 0 && Tasks.Any(task => task.IsBusy);
 
         private static int lastIconStatus = -1;
+        private static readonly object lastCapturedImageLock = new object();
+        private static string lastCapturedImageFilePath;
+        private static long lastCapturedImageTimestamp;
+
+        public static void RecordLastCapturedImage(string filePath)
+        {
+            RecordLastCapturedImage(filePath, System.Diagnostics.Stopwatch.GetTimestamp());
+        }
+
+        internal static void RecordLastCapturedImage(string filePath, long timestampTicks)
+        {
+            if (string.IsNullOrEmpty(filePath))
+            {
+                return;
+            }
+
+            lock (lastCapturedImageLock)
+            {
+                lastCapturedImageFilePath = filePath;
+                lastCapturedImageTimestamp = timestampTicks;
+            }
+        }
+
+        public static void ClearLastCapturedImage()
+        {
+            lock (lastCapturedImageLock)
+            {
+                lastCapturedImageFilePath = null;
+                lastCapturedImageTimestamp = 0;
+            }
+        }
+
+        public static bool TryGetLastCapturedImage(int maxAgeSeconds, out string filePath, out double ageSeconds)
+        {
+            return TryGetLastCapturedImage(maxAgeSeconds, System.Diagnostics.Stopwatch.GetTimestamp(), System.Diagnostics.Stopwatch.Frequency, out filePath, out ageSeconds);
+        }
+
+        internal static bool TryGetLastCapturedImage(int maxAgeSeconds, long nowTicks, long stopwatchFrequency, out string filePath, out double ageSeconds)
+        {
+            long recordedTicks;
+
+            lock (lastCapturedImageLock)
+            {
+                filePath = lastCapturedImageFilePath;
+                recordedTicks = lastCapturedImageTimestamp;
+            }
+
+            if (string.IsNullOrEmpty(filePath) || recordedTicks == 0)
+            {
+                filePath = null;
+                ageSeconds = 0;
+                return false;
+            }
+
+            long elapsedTicks = Math.Max(0, nowTicks - recordedTicks);
+            ageSeconds = stopwatchFrequency > 0 ? (double)elapsedTicks / stopwatchFrequency : 0;
+
+            if (maxAgeSeconds > 0 && ageSeconds > maxAgeSeconds)
+            {
+                return false;
+            }
+
+            return true;
+        }
 
         public static void Start(WorkerTask task)
         {
@@ -247,6 +311,12 @@ namespace ShareX
                         else
                         {
                             DebugHelper.WriteLine($"Task completed. File name: {info.FileName}, Duration: {(long)info.TaskDuration.TotalMilliseconds} ms");
+
+                            if (!task.StopRequested && info.Job == TaskJob.Job && info.DataType == EDataType.Image &&
+                                !string.IsNullOrEmpty(info.FilePath) && FileHelpers.IsImageFile(info.FilePath))
+                            {
+                                RecordLastCapturedImage(info.FilePath);
+                            }
 
                             if (!task.StopRequested && info.Job != TaskJob.ShareURL && !string.IsNullOrEmpty(result))
                             {

@@ -3655,6 +3655,26 @@ namespace ShareX.Localization {
                 return ResourceManager.GetString("TaskSettingsWindow_AutoCopyImageToClipboard", resourceCulture);
             }
         }
+        public static string TaskSettingsWindow_AutoCopyImageToClipboardOnExit {
+            get {
+                return ResourceManager.GetString("TaskSettingsWindow_AutoCopyImageToClipboardOnExit", resourceCulture);
+            }
+        }
+        public static string TaskSettingsWindow_AutoSaveOnExit {
+            get {
+                return ResourceManager.GetString("TaskSettingsWindow_AutoSaveOnExit", resourceCulture);
+            }
+        }
+        public static string TaskSettingsWindow_RecentCaptureEditorWindowSeconds {
+            get {
+                return ResourceManager.GetString("TaskSettingsWindow_RecentCaptureEditorWindowSeconds", resourceCulture);
+            }
+        }
+        public static string TaskSettingsWindow_RecentCaptureEditorWindowSecondsHint {
+            get {
+                return ResourceManager.GetString("TaskSettingsWindow_RecentCaptureEditorWindowSecondsHint", resourceCulture);
+            }
+        }
         public static string TaskSettingsWindow_CanvasFillColor {
             get {
                 return ResourceManager.GetString("TaskSettingsWindow_CanvasFillColor", resourceCulture);
