@@ -245,6 +245,16 @@ namespace ShareX
                         OpenImageEditor(safeTaskSettings);
                     }
                     break;
+                case HotkeyType.ImageEditorLastCapture:
+                    if (!string.IsNullOrEmpty(filePath))
+                    {
+                        AnnotateImageFromFile(filePath, safeTaskSettings);
+                    }
+                    else
+                    {
+                        OpenLastCaptureInImageEditor(safeTaskSettings);
+                    }
+                    break;
                 case HotkeyType.PhotoEditor:
                     OpenPhotoEditor(filePath, safeTaskSettings);
                     break;
@@ -1388,6 +1398,47 @@ namespace ShareX
             AnnotateImageAsync(null, null, taskSettings);
         }
 
+        public static void OpenLastCaptureInImageEditor(TaskSettings taskSettings = null)
+        {
+            if (taskSettings == null) taskSettings = TaskSettings.GetDefaultTaskSettings();
+
+            TaskSettingsTools toolsSettings = taskSettings.UseDefaultToolsSettings
+                ? ApplicationState.DefaultTaskSettings?.ToolsSettings
+                : (taskSettings.TaskSettingsReference?.ToolsSettings ?? taskSettings.ToolsSettings);
+            int windowSeconds = Math.Max(0, toolsSettings?.ImageEditorOptions?.RecentCaptureEditorWindowSeconds ?? 60);
+
+            if (!TaskManager.TryGetLastCapturedImage(windowSeconds, out string lastFilePath, out double ageSeconds))
+            {
+                if (string.IsNullOrEmpty(lastFilePath))
+                {
+                    DebugHelper.WriteLine("Image editor (last capture): No recent image capture available.");
+                }
+                else
+                {
+                    DebugHelper.WriteLine($"Image editor (last capture): Last capture is {ageSeconds:F1}s old (limit {windowSeconds}s), ignoring.");
+                }
+
+                return;
+            }
+
+            if (!File.Exists(lastFilePath) || !FileHelpers.IsImageFile(lastFilePath))
+            {
+                DebugHelper.WriteLine($"Image editor (last capture): File no longer exists or is not an image: {lastFilePath}");
+                return;
+            }
+
+            Bitmap bmp = SkiaImageHelpers.LoadImage(lastFilePath);
+
+            if (bmp == null)
+            {
+                DebugHelper.WriteLine($"Image editor (last capture): Failed to load image file: {lastFilePath}");
+                return;
+            }
+
+            _ = NotificationWindow.CloseActiveWindowAsync();
+            AnnotateImageAsync(bmp, lastFilePath, taskSettings);
+        }
+
         public static void AnnotateImageFromFile(string filePath, TaskSettings taskSettings = null)
         {
             if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
@@ -1452,8 +1503,8 @@ namespace ShareX
                         newFilePath = Path.Combine(screenshotsFolder, fileName);
                     }
 
-                    SkiaImageHelpers.SaveImage(img, newFilePath);
-                    return newFilePath;
+                    bool saved = SkiaImageHelpers.SaveImage(img, newFilePath);
+                    return saved ? newFilePath : null;
                 },
                 SaveImageAsRequested = (skBitmap, newFilePath) =>
                 {
@@ -2438,6 +2489,7 @@ namespace ShareX
                 HotkeyType.PinToScreenFromFile => AppIcons.FileImage,
                 HotkeyType.PinToScreenCloseAll => AppIcons.Unpin,
                 HotkeyType.ImageEditor => AppIcons.ImageEditor,
+                HotkeyType.ImageEditorLastCapture => AppIcons.ImageEditor,
                 HotkeyType.PhotoEditor => AppIcons.Layers,
                 HotkeyType.ImageBeautifier => AppIcons.ImageBeautifier,
                 HotkeyType.ImageEffects => AppIcons.MagicWand,

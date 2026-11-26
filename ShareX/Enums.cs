@@ -372,7 +372,9 @@ namespace ShareX
         [Category(EnumExtensions.HotkeyType_Category_Other)]
         ExitShareX,
         [Category(EnumExtensions.HotkeyType_Category_Tools)]
-        AnimatedGifTrimmer
+        AnimatedGifTrimmer,
+        [Category(EnumExtensions.HotkeyType_Category_Tools)]
+        ImageEditorLastCapture
     }
 
     public enum ToastClickAction // Localized

@@ -772,6 +772,9 @@ namespace ShareX.HelpersLib.Localization {
         public static string HotkeyType_ImageEditor {
             get { return ResourceManager.GetString("HotkeyType_ImageEditor", resourceCulture); }
         }
+        public static string HotkeyType_ImageEditorLastCapture {
+            get { return ResourceManager.GetString("HotkeyType_ImageEditorLastCapture", resourceCulture); }
+        }
         public static string HotkeyType_PhotoEditor {
             get { return ResourceManager.GetString("HotkeyType_PhotoEditor", resourceCulture); }
         }
