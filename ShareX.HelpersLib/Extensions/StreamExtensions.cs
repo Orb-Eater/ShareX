@@ -109,9 +109,16 @@ namespace ShareX.HelpersLib
             {
                 FileHelpers.CreateDirectoryFromFilePath(filePath);
 
-                using (FileStream fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+                if (stream is MemoryStream ms && ms.TryGetBuffer(out ArraySegment<byte> buffer))
                 {
-                    stream.CopyStreamTo(fileStream);
+                    // Single contiguous write straight from MemoryStream's backing buffer (avoids 4 KB chunking and FileStream's internal buffer copy).
+                    using FileStream fileStream = new(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 1, FileOptions.None);
+                    fileStream.Write(buffer.Array, buffer.Offset, buffer.Count);
+                }
+                else
+                {
+                    using FileStream fileStream = new(filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 65536);
+                    stream.CopyStreamTo(fileStream, 65536);
                 }
 
                 return true;

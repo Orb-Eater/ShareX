@@ -48,21 +48,101 @@ internal static class WindowsClipboard
     // so nothing can change the clipboard between the answer and the write.
     public static bool SetImage(IntPtr owner, byte[] png, byte[] dib, string html, Func<bool> stillWanted = null)
     {
-        // A null owner makes SetClipboardData fail after EmptyClipboard.
-        if (owner == IntPtr.Zero) throw new InvalidOperationException("Clipboard owner window is unavailable.");
-        Open(owner);
+        IntPtr dibHandle = dib != null ? AllocHGlobal(dib) : IntPtr.Zero;
+        IntPtr pngHandle = IntPtr.Zero;
+        IntPtr htmlHandle = IntPtr.Zero;
         try
         {
-            if (stillWanted != null && !stillWanted()) return false;
-            if (!NativeMethods.EmptyClipboard()) throw new Win32Exception();
-            SetData(CF_DIB, dib);
-            if (png != null) SetData(RegisterFormat(ClipboardHelpers.FORMAT_PNG), png);
-            if (!string.IsNullOrEmpty(html)) SetData(RegisterFormat(ClipboardDataFormats.Html), Encoding.UTF8.GetBytes(html + "\0"));
-            return true;
+            if (png != null) pngHandle = AllocHGlobal(png);
+            if (!string.IsNullOrEmpty(html)) htmlHandle = AllocHGlobal(Encoding.UTF8.GetBytes(html + "\0"));
+        }
+        catch
+        {
+            FreeHGlobal(htmlHandle);
+            FreeHGlobal(pngHandle);
+            FreeHGlobal(dibHandle);
+            throw;
+        }
+
+        return SetImageHandles(owner, pngHandle, dibHandle, htmlHandle, stillWanted);
+    }
+
+    /// <summary>
+    /// Commits pre-allocated GMEM_MOVEABLE clipboard handles prepared off the UI thread.
+    /// Takes ownership of every non-zero handle and frees any that are not transferred to the OS clipboard.
+    /// </summary>
+    public static bool SetImageHandles(IntPtr owner, IntPtr pngHandle, IntPtr dibHandle, IntPtr htmlHandle, Func<bool> stillWanted = null)
+    {
+        try
+        {
+            // A null owner makes SetClipboardData fail after EmptyClipboard.
+            if (owner == IntPtr.Zero) throw new InvalidOperationException("Clipboard owner window is unavailable.");
+            Open(owner);
+            try
+            {
+                if (stillWanted != null && !stillWanted()) return false;
+                if (!NativeMethods.EmptyClipboard()) throw new Win32Exception();
+                if (dibHandle != IntPtr.Zero)
+                {
+                    SetHandle(CF_DIB, ref dibHandle);
+                }
+                if (pngHandle != IntPtr.Zero)
+                {
+                    SetHandle(RegisterFormat(ClipboardHelpers.FORMAT_PNG), ref pngHandle);
+                }
+                if (htmlHandle != IntPtr.Zero)
+                {
+                    SetHandle(RegisterFormat(ClipboardDataFormats.Html), ref htmlHandle);
+                }
+                return true;
+            }
+            finally
+            {
+                NativeMethods.CloseClipboard();
+            }
         }
         finally
         {
-            NativeMethods.CloseClipboard();
+            // Any handle still non-zero was never handed to Windows and must be freed here.
+            FreeHGlobal(htmlHandle);
+            FreeHGlobal(pngHandle);
+            FreeHGlobal(dibHandle);
+        }
+    }
+
+    public static unsafe IntPtr AllocHGlobal(ReadOnlySpan<byte> data)
+    {
+        IntPtr handle = NativeMethods.GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)data.Length);
+        if (handle == IntPtr.Zero) throw new Win32Exception();
+        try
+        {
+            IntPtr pointer = NativeMethods.GlobalLock(handle);
+            if (pointer == IntPtr.Zero) throw new Win32Exception();
+            try
+            {
+                if (data.Length > 0)
+                {
+                    data.CopyTo(new Span<byte>((void*)pointer, data.Length));
+                }
+            }
+            finally
+            {
+                NativeMethods.GlobalUnlock(handle);
+            }
+            return handle;
+        }
+        catch
+        {
+            NativeMethods.GlobalFree(handle);
+            throw;
+        }
+    }
+
+    public static void FreeHGlobal(IntPtr handle)
+    {
+        if (handle != IntPtr.Zero)
+        {
+            NativeMethods.GlobalFree(handle);
         }
     }
 
@@ -84,23 +164,10 @@ internal static class WindowsClipboard
         return format;
     }
 
-    private static void SetData(uint format, byte[] data)
+    private static void SetHandle(uint format, ref IntPtr handle)
     {
-        IntPtr handle = NativeMethods.GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)data.Length);
-        if (handle == IntPtr.Zero) throw new Win32Exception();
-        try
-        {
-            IntPtr pointer = NativeMethods.GlobalLock(handle);
-            if (pointer == IntPtr.Zero) throw new Win32Exception();
-            try { Marshal.Copy(data, 0, pointer, data.Length); }
-            finally { NativeMethods.GlobalUnlock(handle); }
-            if (NativeMethods.SetClipboardData(format, handle) == IntPtr.Zero) throw new Win32Exception();
-        }
-        catch
-        {
-            // The system owns the memory only after SetClipboardData succeeds.
-            NativeMethods.GlobalFree(handle);
-            throw;
-        }
+        if (NativeMethods.SetClipboardData(format, handle) == IntPtr.Zero) throw new Win32Exception();
+        // The system owns the memory once SetClipboardData succeeds.
+        handle = IntPtr.Zero;
     }
 }

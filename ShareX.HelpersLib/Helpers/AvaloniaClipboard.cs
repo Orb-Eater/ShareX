@@ -84,6 +84,32 @@ internal static class AvaloniaClipboard
         return true;
     });
 
+    // Commits pre-allocated Win32 clipboard handles on the UI thread (sub-millisecond) so heavy encoding
+    // and memory copies never block the UI thread. Always frees handles if DesktopServices.Run fails.
+    public static bool SetImageHandles(IntPtr pngHandle, IntPtr dibHandle, IntPtr htmlHandle, Func<bool> stillWanted = null)
+    {
+        bool handed = false;
+        try
+        {
+            return DesktopServices.Run(() =>
+            {
+                handed = true;
+                return WindowsClipboard.SetImageHandles(
+                    DesktopServices.GetWindow().TryGetPlatformHandle()?.Handle ?? IntPtr.Zero,
+                    pngHandle, dibHandle, htmlHandle, stillWanted);
+            });
+        }
+        finally
+        {
+            if (!handed)
+            {
+                WindowsClipboard.FreeHGlobal(htmlHandle);
+                WindowsClipboard.FreeHGlobal(pngHandle);
+                WindowsClipboard.FreeHGlobal(dibHandle);
+            }
+        }
+    }
+
     private static OwnedImageTransfer CreateImageTransfer(byte[] png, string html)
     {
         using MemoryStream stream = new(png, writable: false);

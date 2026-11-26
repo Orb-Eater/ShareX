@@ -74,27 +74,170 @@ namespace ShareX.HelpersLib
         // prepared off the UI thread uses it so that it does not overwrite a newer copy.
         public static bool CopyImage(Image img, string fileName = null, Func<bool> stillWanted = null)
         {
+            return CopyImage(img, preEncodedPng: default, fileName: fileName, knownOpaque: false, stillWanted: stillWanted);
+        }
+
+        /// <summary>
+        /// Copies <paramref name="img"/> to the clipboard, reusing <paramref name="preEncodedPng"/> when provided
+        /// so captures that also save PNG to disk avoid encoding the image twice.
+        /// </summary>
+        public static bool CopyImage(Image img, ReadOnlyMemory<byte> preEncodedPng, string fileName = null,
+            bool knownOpaque = false, Func<bool> stillWanted = null)
+        {
             if (img == null) return false;
-            string size = "unknown size";
+            string size = $"{img.Width}x{img.Height}";
             try
             {
-                size = $"{img.Width}x{img.Height}";
-                using MemoryStream png = new();
-                SkiaImageHelpers.SavePNG(img, png, PNGBitDepth.Automatic, long.MaxValue, ClipboardPngOptions);
-                byte[] pngBytes = png.ToArray();
-                byte[] dib = OperatingSystem.IsWindows() ? CreateDib(img) : null;
+                if (OperatingSystem.IsWindows())
+                {
+                    using PreparedClipboardImage prepared = PrepareImageHandles(img, preEncodedPng, fileName, knownOpaque);
+                    return CommitPreparedImage(prepared, stillWanted);
+                }
+
+                byte[] pngBytes = !preEncodedPng.IsEmpty ? preEncodedPng.ToArray() : EncodeClipboardPng(img);
                 string html = CreateImageHtml(fileName);
-                bool copied = AvaloniaClipboard.SetImage(pngBytes, dib, html, stillWanted);
-                // One line per image copy: the size and formats tell what another app could paste.
-                // KB rounded up, so a small image never shows as 0 KB.
-                string formats = string.Join(" + ", new[] { dib != null ? $"DIB {(dib.Length + 1023) / 1024} KB" : null,
-                    $"PNG {(pngBytes.Length + 1023) / 1024} KB", html != null ? "HTML" : null }.Where(format => format != null));
-                DebugHelper.WriteLine(copied
-                    ? $"Clipboard: image {size} written as {formats}."
-                    : $"Clipboard: image {size} was not written ({formats}): the clipboard changed while it was being prepared.");
+                bool copied = AvaloniaClipboard.SetImage(pngBytes, null, html, stillWanted);
+                LogImageCopy(copied, size, 0, pngBytes.Length, html != null);
                 return copied;
             }
             catch (Exception e) { DebugHelper.WriteException(e, $"Clipboard copy image failed ({size})."); return false; }
+        }
+
+        /// <summary>
+        /// Pre-allocated Win32 clipboard handles for an image, prepared off the UI thread so disk writes and
+        /// clipboard preparation can run concurrently. Dispose frees any handles not yet committed.
+        /// </summary>
+        public sealed class PreparedClipboardImage : IDisposable
+        {
+            internal IntPtr PngHandle;
+            internal IntPtr DibHandle;
+            internal IntPtr HtmlHandle;
+            internal int PngBytes;
+            internal int DibBytes;
+            internal bool HasHtml;
+            internal string Size;
+
+            public void Dispose()
+            {
+                if (HtmlHandle != IntPtr.Zero) { WindowsClipboard.FreeHGlobal(HtmlHandle); HtmlHandle = IntPtr.Zero; }
+                if (PngHandle != IntPtr.Zero) { WindowsClipboard.FreeHGlobal(PngHandle); PngHandle = IntPtr.Zero; }
+                if (DibHandle != IntPtr.Zero) { WindowsClipboard.FreeHGlobal(DibHandle); DibHandle = IntPtr.Zero; }
+            }
+        }
+
+        /// <summary>
+        /// Prepares Win32 CF_DIB, PNG and optional HTML clipboard handles off the UI thread.
+        /// When <paramref name="preEncodedPng"/> is non-empty, copies it directly into an HGLOBAL with zero re-encoding.
+        /// </summary>
+        public static PreparedClipboardImage PrepareImageHandles(Image img, ReadOnlyMemory<byte> preEncodedPng = default,
+            string fileName = null, bool knownOpaque = false)
+        {
+            if (img == null) return null;
+            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+
+            PreparedClipboardImage prepared = new() { Size = $"{img.Width}x{img.Height}" };
+            try
+            {
+                if (!preEncodedPng.IsEmpty)
+                {
+                    prepared.PngHandle = WindowsClipboard.AllocHGlobal(preEncodedPng.Span);
+                    prepared.PngBytes = preEncodedPng.Length;
+                }
+                else
+                {
+                    using MemoryStream png = new();
+                    SkiaImageHelpers.SavePNG(img, png, PNGBitDepth.Automatic, long.MaxValue, ClipboardPngOptions);
+                    if (png.TryGetBuffer(out ArraySegment<byte> seg))
+                    {
+                        prepared.PngHandle = WindowsClipboard.AllocHGlobal(seg.AsSpan());
+                        prepared.PngBytes = seg.Count;
+                    }
+                    else
+                    {
+                        byte[] arr = png.ToArray();
+                        prepared.PngHandle = WindowsClipboard.AllocHGlobal(arr);
+                        prepared.PngBytes = arr.Length;
+                    }
+                }
+
+                prepared.DibHandle = CreateDibHGlobal(img, knownOpaque, out prepared.DibBytes);
+
+                string html = CreateImageHtml(fileName);
+                if (!string.IsNullOrEmpty(html))
+                {
+                    prepared.HtmlHandle = WindowsClipboard.AllocHGlobal(Encoding.UTF8.GetBytes(html + "\0"));
+                    prepared.HasHtml = true;
+                }
+
+                return prepared;
+            }
+            catch
+            {
+                prepared.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>Commits handles from <see cref="PrepareImageHandles"/> to the Win32 clipboard.</summary>
+        public static bool CommitPreparedImage(PreparedClipboardImage prepared, Func<bool> stillWanted = null)
+        {
+            if (prepared == null) return false;
+            IntPtr png = prepared.PngHandle; prepared.PngHandle = IntPtr.Zero;
+            IntPtr dib = prepared.DibHandle; prepared.DibHandle = IntPtr.Zero;
+            IntPtr html = prepared.HtmlHandle; prepared.HtmlHandle = IntPtr.Zero;
+            try
+            {
+                bool copied = AvaloniaClipboard.SetImageHandles(png, dib, html, stillWanted);
+                LogImageCopy(copied, prepared.Size, prepared.DibBytes, prepared.PngBytes, prepared.HasHtml);
+                return copied;
+            }
+            catch (Exception e)
+            {
+                DebugHelper.WriteException(e, $"Clipboard copy image failed ({prepared.Size}).");
+                return false;
+            }
+        }
+
+        private static byte[] EncodeClipboardPng(Image img)
+        {
+            using MemoryStream png = new();
+            SkiaImageHelpers.SavePNG(img, png, PNGBitDepth.Automatic, long.MaxValue, ClipboardPngOptions);
+            return png.ToArray();
+        }
+
+        private static void LogImageCopy(bool copied, string size, int dibBytes, int pngBytes, bool hasHtml)
+        {
+            // One line per image copy: the size and formats tell what another app could paste.
+            // KB rounded up, so a small image never shows as 0 KB.
+            string formats = string.Join(" + ", new[] { dibBytes > 0 ? $"DIB {(dibBytes + 1023) / 1024} KB" : null,
+                $"PNG {(pngBytes + 1023) / 1024} KB", hasHtml ? "HTML" : null }.Where(format => format != null));
+            DebugHelper.WriteLine(copied
+                ? $"Clipboard: image {size} written as {formats}."
+                : $"Clipboard: image {size} was not written ({formats}): the clipboard changed while it was being prepared.");
+        }
+
+        private static IntPtr CreateDibHGlobal(Image img, bool knownOpaque, out int byteCount)
+        {
+            if (HelpersOptions.UseAlternativeClipboardCopyImage && !HelpersOptions.DefaultCopyImageFillBackground)
+            {
+                byte[] alt = ClipboardHelpersEx.ConvertToDib(img);
+                byteCount = alt.Length;
+                return WindowsClipboard.AllocHGlobal(alt);
+            }
+
+            // Fast path: write 24-bpp bottom-up DIB directly into GMEM_MOVEABLE without an intermediate LOH byte[].
+            IntPtr hDib = SkiaImageHelpers.TryCreateOpaqueDibHGlobal(img, knownOpaque, out byteCount);
+            if (hDib != IntPtr.Zero) return hDib;
+
+            using Bitmap opaque = SkiaImageHelpers.FillBackground(img, Color.White);
+            hDib = SkiaImageHelpers.TryCreateOpaqueDibHGlobal(opaque, knownOpaque: true, out byteCount);
+            if (hDib != IntPtr.Zero) return hDib;
+
+            using MemoryStream bmp = new();
+            opaque.Save(bmp, ImageFormat.Bmp);
+            byte[] fallback = bmp.ToArray()[14..];
+            byteCount = fallback.Length;
+            return WindowsClipboard.AllocHGlobal(fallback);
         }
 
         private static string CreateImageHtml(string fileName)
@@ -102,23 +245,6 @@ namespace ShareX.HelpersLib
             if (!HelpersOptions.UseAlternativeClipboardCopyImage || string.IsNullOrEmpty(fileName)) return null;
             string html = $"<img src=\"{fileName}\"/>";
             return OperatingSystem.IsWindows() ? GenerateHTMLFragment(html) : html;
-        }
-
-        // CF_DIB without the BITMAPFILEHEADER. The default is an opaque 24 bpp bottom-up DIB,
-        // which is what Office and Windows clipboard history expect.
-        private static byte[] CreateDib(Image img)
-        {
-            if (HelpersOptions.UseAlternativeClipboardCopyImage && !HelpersOptions.DefaultCopyImageFillBackground)
-                return ClipboardHelpersEx.ConvertToDib(img);
-            // A capture has no transparent pixel, so there is nothing to fill and its rows can be copied as they are.
-            byte[] dib = SkiaImageHelpers.TryCreateOpaqueDib(img);
-            if (dib != null) return dib;
-            using Bitmap opaque = SkiaImageHelpers.FillBackground(img, Color.White);
-            dib = SkiaImageHelpers.TryCreateOpaqueDib(opaque);
-            if (dib != null) return dib;
-            using MemoryStream bmp = new();
-            opaque.Save(bmp, ImageFormat.Bmp);
-            return bmp.ToArray()[14..];
         }
 
         public static bool CopyFile(string path)
