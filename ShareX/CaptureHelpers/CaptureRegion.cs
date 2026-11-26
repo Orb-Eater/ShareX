@@ -68,54 +68,77 @@ namespace ShareX
 
             DxgiGpuDesktopSnapshot gpuSnapshot = null;
             SKBitmap frozenScreenshot = null;
-
-            // Zero-copy GPU desktop snapshot: avoids 48 MB CPU readback when opening the region overlay.
-            if (!taskSettings.CaptureSettings.HDRScreenshotColorCorrection)
-            {
-                gpuSnapshot = DxgiDesktopCapturer.TryCaptureGpuSnapshot(screenBounds);
-            }
-
-            if (gpuSnapshot == null)
-            {
-                try
-                {
-                    frozenScreenshot = activeMonitorMode
-                        ? screenshot.CaptureActiveMonitor()
-                        : screenshot.CaptureFullscreen();
-                }
-                catch when (_prewarm)
-                {
-                    // On lock screen / UAC / isolated desktop during startup prewarm, still warm the overlay pipeline.
-                    frozenScreenshot = new SKBitmap(new SKImageInfo(
-                        Math.Max(1, screenBounds.Width),
-                        Math.Max(1, screenBounds.Height),
-                        SKColorType.Bgra8888,
-                        SKAlphaType.Opaque));
-                    frozenScreenshot.Erase(SKColors.Black);
-                }
-            }
-
             SKBitmap cursorBitmap = null;
             Point cursorPosition = Point.Empty;
 
-            if (taskSettings.CaptureSettings.ShowCursor)
+            try
             {
-                CursorData cursorData = new CursorData();
-                if (cursorData.IsVisible)
+                // Zero-copy GPU desktop snapshot: avoids 48 MB CPU readback when opening the region overlay.
+                if (!taskSettings.CaptureSettings.HDRScreenshotColorCorrection)
                 {
-                    cursorPosition = new Point(
-                        cursorData.DrawPosition.X - screenBounds.X,
-                        cursorData.DrawPosition.Y - screenBounds.Y);
-
-                    if (gpuSnapshot != null)
+                    gpuSnapshot = DxgiDesktopCapturer.TryCaptureGpuSnapshot(screenBounds);
+                    if (gpuSnapshot == null)
                     {
-                        cursorBitmap = CaptureCursorFromGpuSnapshot(cursorData, gpuSnapshot, cursorPosition);
-                    }
-                    else if (frozenScreenshot != null)
-                    {
-                        cursorBitmap = cursorData.ToBitmap(frozenScreenshot, screenBounds.Location);
+                        // Avoid a redundant second DXGI timeout on the same bounds inside the GDI fallback path.
+                        screenshot.UseDxgi = false;
                     }
                 }
+
+                if (gpuSnapshot == null)
+                {
+                    try
+                    {
+                        frozenScreenshot = activeMonitorMode
+                            ? screenshot.CaptureActiveMonitor()
+                            : screenshot.CaptureFullscreen();
+                    }
+                    catch when (_prewarm)
+                    {
+                        // On lock screen / UAC / isolated desktop during startup prewarm, still warm the overlay pipeline.
+                        frozenScreenshot = new SKBitmap(new SKImageInfo(
+                            Math.Max(1, screenBounds.Width),
+                            Math.Max(1, screenBounds.Height),
+                            SKColorType.Bgra8888,
+                            SKAlphaType.Opaque));
+                        frozenScreenshot.Erase(SKColors.Black);
+                    }
+                }
+
+                if (taskSettings.CaptureSettings.ShowCursor)
+                {
+                    try
+                    {
+                        CursorData cursorData = new CursorData();
+                        if (cursorData.IsVisible)
+                        {
+                            cursorPosition = new Point(
+                                cursorData.DrawPosition.X - screenBounds.X,
+                                cursorData.DrawPosition.Y - screenBounds.Y);
+
+                            if (gpuSnapshot != null)
+                            {
+                                cursorBitmap = CaptureCursorFromGpuSnapshot(cursorData, gpuSnapshot, cursorPosition);
+                            }
+                            else if (frozenScreenshot != null)
+                            {
+                                cursorBitmap = cursorData.ToBitmap(frozenScreenshot, screenBounds.Location);
+                            }
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        DebugHelper.WriteException(e, "Cursor capture failed.");
+                        cursorBitmap?.Dispose();
+                        cursorBitmap = null;
+                    }
+                }
+            }
+            catch
+            {
+                cursorBitmap?.Dispose();
+                frozenScreenshot?.Dispose();
+                gpuSnapshot?.Dispose();
+                throw;
             }
 
             AvaloniaRegionCaptureRequest request = new AvaloniaRegionCaptureRequest
@@ -162,7 +185,7 @@ namespace ShareX
         private static SKBitmap CaptureCursorFromGpuSnapshot(CursorData cursorData, DxgiGpuDesktopSnapshot gpuSnapshot, Point localPosition)
         {
             Size iconSize = cursorData.Size.IsEmpty ? WindowsImageInterop.GetIconSize(cursorData.Handle) : cursorData.Size;
-            if (iconSize.IsEmpty)
+            if (iconSize.Width <= 0 || iconSize.Height <= 0)
             {
                 return cursorData.ToBitmap();
             }
