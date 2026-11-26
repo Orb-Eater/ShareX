@@ -1,6 +1,6 @@
 # ShareX 22.4.0 Fork Benchmarks (2026-11-26)
 
-**Coded by Neon xHigh under 57 minutes | 8 minutes fixing bugs | All with 1 prompt**
+**Coded by Neon xHigh under 57 minutes | 15 minutes fixing bugs | All with 1 prompt**
 
 Interactive dashboard (GitHub Pages): **https://orb-eater.github.io/ShareX/** *(same sanitized interactive HTML as `index.html` in this branch)*
 

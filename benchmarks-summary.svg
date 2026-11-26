@@ -27,7 +27,7 @@
 
   <!-- Header -->
   <text x="24" y="30" class="title">ShareX v21.0 → 22.4.0 Speed Fork (2026-11-26)</text>
-  <text x="24" y="47" class="val-hi">Coded by Neon xHigh under 57 minutes | 8 minutes fixing bugs | All with 1 prompt</text>
+  <text x="24" y="47" class="val-hi">Coded by Neon xHigh under 57 minutes | 15 minutes fixing bugs | All with 1 prompt</text>
   <text x="24" y="61" class="sub">Windows 11 · 6200×1920 dual-monitor desktop (landscape + 90° rotated portrait) · NVIDIA GPU · Shorter bars = faster / lower RAM</text>
 
   <!-- Legend -->
