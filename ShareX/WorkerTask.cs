@@ -614,7 +614,17 @@ namespace ShareX
                 }
             }
 
-            if (Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.CopyImageToClipboard))
+            bool copyImageToClipboard = Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.CopyImageToClipboard);
+            bool hasImageOutput = Info.TaskSettings.AfterCaptureJob.HasFlagAny(
+                AfterCaptureTasks.SaveImageToFile, AfterCaptureTasks.SaveImageToFileWithDialog,
+                AfterCaptureTasks.DoOCR, AfterCaptureTasks.UploadImageToHost, AfterCaptureTasks.AnalyzeImage);
+
+            // When both clipboard copy and image output are requested on Windows, defer clipboard prep until
+            // PrepareImage completes so we reuse the encoded PNG bytes (zero duplicate PNG encode) and overlap
+            // SIMD direct-to-HGLOBAL DIB creation with the disk FileStream write.
+            bool overlapClipboardWithOutput = copyImageToClipboard && hasImageOutput && OperatingSystem.IsWindows();
+
+            if (copyImageToClipboard && !overlapClipboardWithOutput)
             {
                 ClipboardHelpers.CopyImage(Image, Info.FileName);
                 DebugHelper.WriteLine("Image copied to clipboard.");
@@ -633,65 +643,119 @@ namespace ShareX
 
             Info.Metadata.Image = Image;
 
-            if (Info.TaskSettings.AfterCaptureJob.HasFlagAny(AfterCaptureTasks.SaveImageToFile, AfterCaptureTasks.SaveImageToFileWithDialog, AfterCaptureTasks.DoOCR,
-                AfterCaptureTasks.UploadImageToHost, AfterCaptureTasks.AnalyzeImage))
+            if (hasImageOutput)
             {
                 ImageData imageData = TaskHelpers.PrepareImage(Image, Info.TaskSettings);
                 Data = imageData.ImageStream;
                 Info.FileName = Path.ChangeExtension(Info.FileName, imageData.ImageFormat.GetFileExtension());
 
-                if (Info.TaskSettings.AfterCaptureJob.HasFlagAny(AfterCaptureTasks.SaveImageToFile, AfterCaptureTasks.AnalyzeImage))
+                System.Threading.Tasks.Task<ClipboardHelpers.PreparedClipboardImage> clipboardPrepTask = null;
+                if (overlapClipboardWithOutput)
                 {
-                    string screenshotsFolder = TaskHelpers.GetScreenshotsFolder(Info.TaskSettings, Info.Metadata);
-                    string filePath = TaskHelpers.HandleExistsFile(screenshotsFolder, Info.FileName, Info.TaskSettings);
-
-                    if (!string.IsNullOrEmpty(filePath))
+                    ReadOnlyMemory<byte> sharedPng = default;
+                    if (imageData.ImageFormat == EImageFormat.PNG &&
+                        imageData.ImageStream is MemoryStream pngStream &&
+                        pngStream.Length > 0 &&
+                        pngStream.TryGetBuffer(out ArraySegment<byte> pngSegment))
                     {
-                        Info.FilePath = filePath;
-                        imageData.Write(Info.FilePath);
-                        DebugHelper.WriteLine("Image saved to file: " + Info.FilePath);
+                        sharedPng = pngSegment;
                     }
+
+                    Image imageForClipboard = Image;
+                    string fileNameForClipboard = Info.FileName;
+                    clipboardPrepTask = System.Threading.Tasks.Task.Run(() =>
+                        ClipboardHelpers.PrepareImageHandles(imageForClipboard, sharedPng, fileNameForClipboard));
                 }
 
-                if (Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.SaveImageToFileWithDialog))
+                try
                 {
-                    string initialDirectory = Directory.Exists(HelpersOptions.LastSaveDirectory)
-                        ? HelpersOptions.LastSaveDirectory : TaskHelpers.GetScreenshotsFolder(Info.TaskSettings, Info.Metadata);
-                    bool imageSaved;
-                    do
+                    if (Info.TaskSettings.AfterCaptureJob.HasFlagAny(AfterCaptureTasks.SaveImageToFile, AfterCaptureTasks.AnalyzeImage))
                     {
-                        string selectedPath = FileDialogHelpers.SaveFile(
-                            Strings.UploadTask_DoAfterCaptureJobs_Choose_a_folder_to_save + " " + Path.GetFileName(Info.FileName),
-                            string.Format("*{0}|*{0}|{1}|*.*", Path.GetExtension(Info.FileName), Strings.WorkerTask_AllFilesFilter),
-                            Info.FileName, initialDirectory, Path.GetExtension(Info.FileName).TrimStart('.'));
-                        if (string.IsNullOrEmpty(selectedPath)) break;
-                        Info.FilePath = selectedPath;
-                        HelpersOptions.LastSaveDirectory = Path.GetDirectoryName(Info.FilePath);
-                        imageSaved = imageData.Write(Info.FilePath);
-                        if (imageSaved) DebugHelper.WriteLine("Image saved to file with dialog: " + Info.FilePath);
-                    } while (!imageSaved);
+                        string screenshotsFolder = TaskHelpers.GetScreenshotsFolder(Info.TaskSettings, Info.Metadata);
+                        string filePath = TaskHelpers.HandleExistsFile(screenshotsFolder, Info.FileName, Info.TaskSettings);
+
+                        if (!string.IsNullOrEmpty(filePath))
+                        {
+                            Info.FilePath = filePath;
+                            imageData.Write(Info.FilePath);
+                            DebugHelper.WriteLine("Image saved to file: " + Info.FilePath);
+                        }
+                    }
+
+                    if (clipboardPrepTask != null)
+                    {
+                        // Commit right after the disk file write (and before any modal Save File dialog or DoFileJobs).
+                        try
+                        {
+                            using ClipboardHelpers.PreparedClipboardImage prepared = clipboardPrepTask.GetAwaiter().GetResult();
+                            clipboardPrepTask = null;
+                            if (ClipboardHelpers.CommitPreparedImage(prepared))
+                            {
+                                DebugHelper.WriteLine("Image copied to clipboard.");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            clipboardPrepTask = null;
+                            DebugHelper.WriteException(ex, "Concurrent clipboard copy image failed.");
+                        }
+                    }
+
+                    if (Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.SaveImageToFileWithDialog))
+                    {
+                        string initialDirectory = Directory.Exists(HelpersOptions.LastSaveDirectory)
+                            ? HelpersOptions.LastSaveDirectory : TaskHelpers.GetScreenshotsFolder(Info.TaskSettings, Info.Metadata);
+                        bool imageSaved;
+                        do
+                        {
+                            string selectedPath = FileDialogHelpers.SaveFile(
+                                Strings.UploadTask_DoAfterCaptureJobs_Choose_a_folder_to_save + " " + Path.GetFileName(Info.FileName),
+                                string.Format("*{0}|*{0}|{1}|*.*", Path.GetExtension(Info.FileName), Strings.WorkerTask_AllFilesFilter),
+                                Info.FileName, initialDirectory, Path.GetExtension(Info.FileName).TrimStart('.'));
+                            if (string.IsNullOrEmpty(selectedPath)) break;
+                            Info.FilePath = selectedPath;
+                            HelpersOptions.LastSaveDirectory = Path.GetDirectoryName(Info.FilePath);
+                            imageSaved = imageData.Write(Info.FilePath);
+                            if (imageSaved) DebugHelper.WriteLine("Image saved to file with dialog: " + Info.FilePath);
+                        } while (!imageSaved);
+                    }
+
+                    if (Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.SaveThumbnailImageToFile))
+                    {
+                        string thumbnailFileName, thumbnailFolder;
+
+                        if (!string.IsNullOrEmpty(Info.FilePath))
+                        {
+                            thumbnailFileName = Path.GetFileName(Info.FilePath);
+                            thumbnailFolder = Path.GetDirectoryName(Info.FilePath);
+                        }
+                        else
+                        {
+                            thumbnailFileName = Info.FileName;
+                            thumbnailFolder = TaskHelpers.GetScreenshotsFolder(Info.TaskSettings, Info.Metadata);
+                        }
+
+                        Info.ThumbnailFilePath = TaskHelpers.CreateThumbnail(Image, thumbnailFolder, thumbnailFileName, Info.TaskSettings);
+
+                        if (!string.IsNullOrEmpty(Info.ThumbnailFilePath))
+                        {
+                            DebugHelper.WriteLine("Thumbnail saved to file: " + Info.ThumbnailFilePath);
+                        }
+                    }
                 }
-
-                if (Info.TaskSettings.AfterCaptureJob.HasFlag(AfterCaptureTasks.SaveThumbnailImageToFile))
+                finally
                 {
-                    string thumbnailFileName, thumbnailFolder;
-
-                    if (!string.IsNullOrEmpty(Info.FilePath))
+                    if (clipboardPrepTask != null)
                     {
-                        thumbnailFileName = Path.GetFileName(Info.FilePath);
-                        thumbnailFolder = Path.GetDirectoryName(Info.FilePath);
-                    }
-                    else
-                    {
-                        thumbnailFileName = Info.FileName;
-                        thumbnailFolder = TaskHelpers.GetScreenshotsFolder(Info.TaskSettings, Info.Metadata);
-                    }
-
-                    Info.ThumbnailFilePath = TaskHelpers.CreateThumbnail(Image, thumbnailFolder, thumbnailFileName, Info.TaskSettings);
-
-                    if (!string.IsNullOrEmpty(Info.ThumbnailFilePath))
-                    {
-                        DebugHelper.WriteLine("Thumbnail saved to file: " + Info.ThumbnailFilePath);
+                        // Wait before returning so Image isn't disposed while the background task still reads its pixels,
+                        // and free any uncommitted HGLOBAL handles.
+                        try
+                        {
+                            clipboardPrepTask.GetAwaiter().GetResult()?.Dispose();
+                        }
+                        catch
+                        {
+                        }
                     }
                 }
             }

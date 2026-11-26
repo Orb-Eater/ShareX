@@ -28,6 +28,10 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
+using System.Threading.Tasks;
 
 namespace ShareX.HelpersLib;
 
@@ -148,6 +152,7 @@ public static partial class SkiaImageHelpers
         return SkiaPixelBuffer.Compare(firstPixels, secondPixels);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static unsafe bool IsImageTransparent(SKBitmap bitmap)
     {
         if (TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes))
@@ -184,6 +189,7 @@ public static partial class SkiaImageHelpers
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static bool HasTransparentPixel(ReadOnlySpan<uint> row)
     {
         const uint alphaMask = 0xFF000000;
@@ -208,6 +214,7 @@ public static partial class SkiaImageHelpers
     /// SaveBMP writes after that header for an image with no see-through pixel. Null when the pixels cannot be read
     /// in place, or when a pixel is see-through (a bitmap marked opaque counts as having none).
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static unsafe byte[] TryCreateOpaqueDib(SKBitmap bitmap)
     {
         if (bitmap == null || !TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes) || IsImageTransparent(bitmap))
@@ -218,34 +225,143 @@ public static partial class SkiaImageHelpers
         int stride = checked((checked(width * 3) + 3) / 4 * 4);
         int pixelSize = checked(stride * height);
         byte[] dib = new byte[checked(headerSize + pixelSize)];
-        BitConverter.TryWriteBytes(dib.AsSpan(0), headerSize);
-        BitConverter.TryWriteBytes(dib.AsSpan(4), width);
-        BitConverter.TryWriteBytes(dib.AsSpan(8), height);
-        BitConverter.TryWriteBytes(dib.AsSpan(12), (ushort)1);
-        BitConverter.TryWriteBytes(dib.AsSpan(14), (ushort)24);
-        BitConverter.TryWriteBytes(dib.AsSpan(20), pixelSize);
-        BitConverter.TryWriteBytes(dib.AsSpan(24), 3780);
-        BitConverter.TryWriteBytes(dib.AsSpan(28), 3780);
-
-        // No pixel is see-through, so the stored colours are already the straight ones.
-        int blue = bitmap.ColorType == SKColorType.Bgra8888 ? 0 : 2, red = 2 - blue;
         fixed (byte* output = dib)
         {
-            for (int y = 0; y < height; y++)
-            {
-                byte* source = direct + (long)(height - 1 - y) * rowBytes;
-                byte* target = output + headerSize + (long)y * stride;
-                for (int x = 0; x < width; x++, source += 4, target += 3)
-                {
-                    target[0] = source[blue];
-                    target[1] = source[1];
-                    target[2] = source[red];
-                }
-            }
+            WriteOpaqueDibPixels(direct, rowBytes, width, height, bitmap.ColorType == SKColorType.Bgra8888, output, headerSize, stride, pixelSize);
         }
 
         GC.KeepAlive(bitmap); // the rows were read through a bare pointer
         return dib;
+    }
+
+    /// <summary>
+    /// Writes a 24 bpp bottom-up CF_DIB directly into a movable Win32 HGLOBAL, avoiding an intermediate LOH byte[].
+    /// Caller owns the returned handle until handed to SetClipboardData or freed with GlobalFree.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    internal static unsafe IntPtr TryCreateOpaqueDibHGlobal(SKBitmap bitmap, bool knownOpaque, out int byteCount)
+    {
+        byteCount = 0;
+        if (bitmap == null || !TryGetDirectPixels(bitmap, out byte* direct, out int rowBytes) ||
+            (!knownOpaque && IsImageTransparent(bitmap)))
+        {
+            return IntPtr.Zero;
+        }
+
+        const int headerSize = 40;
+        int width = bitmap.Width, height = bitmap.Height;
+        int stride = checked((checked(width * 3) + 3) / 4 * 4);
+        int pixelSize = checked(stride * height);
+        int totalSize = checked(headerSize + pixelSize);
+
+        const uint GMEM_MOVEABLE = 0x0002;
+        IntPtr handle = NativeMethods.GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)totalSize);
+        if (handle == IntPtr.Zero) return IntPtr.Zero;
+
+        try
+        {
+            IntPtr dstPtr = NativeMethods.GlobalLock(handle);
+            if (dstPtr == IntPtr.Zero)
+            {
+                NativeMethods.GlobalFree(handle);
+                return IntPtr.Zero;
+            }
+
+            try
+            {
+                WriteOpaqueDibPixels(direct, rowBytes, width, height, bitmap.ColorType == SKColorType.Bgra8888,
+                    (byte*)dstPtr, headerSize, stride, pixelSize);
+            }
+            finally
+            {
+                NativeMethods.GlobalUnlock(handle);
+            }
+
+            GC.KeepAlive(bitmap);
+            byteCount = totalSize;
+            return handle;
+        }
+        catch
+        {
+            NativeMethods.GlobalFree(handle);
+            throw;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static unsafe void WriteOpaqueDibPixels(byte* direct, int rowBytes, int width, int height, bool bgra,
+        byte* output, int headerSize, int stride, int pixelSize)
+    {
+        Span<byte> header = new(output, headerSize);
+        header.Clear();
+        BitConverter.TryWriteBytes(header.Slice(0), headerSize);
+        BitConverter.TryWriteBytes(header.Slice(4), width);
+        BitConverter.TryWriteBytes(header.Slice(8), height);
+        BitConverter.TryWriteBytes(header.Slice(12), (ushort)1);
+        BitConverter.TryWriteBytes(header.Slice(14), (ushort)24);
+        BitConverter.TryWriteBytes(header.Slice(20), pixelSize);
+        BitConverter.TryWriteBytes(header.Slice(24), 3780);
+        BitConverter.TryWriteBytes(header.Slice(28), 3780);
+
+        int padBytes = stride - width * 3;
+        int bands = (long)width * height >= 500_000 ? Math.Min(Environment.ProcessorCount, Math.Max(1, height / 64)) : 1;
+        IntPtr srcBasePtr = (IntPtr)direct;
+        IntPtr dstBasePtr = (IntPtr)(output + headerSize);
+
+        void CopyBand(int yStart, int yEnd)
+        {
+            byte* srcBase = (byte*)srcBasePtr;
+            byte* dstBase = (byte*)dstBasePtr;
+            int blue = bgra ? 0 : 2, red = 2 - blue;
+            bool useSimd = Ssse3.IsSupported && width >= 6;
+            int simdLimit = width - 6;
+            Vector128<byte> mask = bgra
+                ? Vector128.Create((byte)0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 0x80, 0x80, 0x80, 0x80)
+                : Vector128.Create((byte)2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, 0x80, 0x80, 0x80, 0x80);
+
+            for (int y = yStart; y < yEnd; y++)
+            {
+                byte* source = srcBase + (long)(height - 1 - y) * rowBytes;
+                byte* target = dstBase + (long)y * stride;
+                int x = 0;
+
+                if (useSimd)
+                {
+                    for (; x <= simdLimit; x += 4)
+                    {
+                        Ssse3.Shuffle(Sse2.LoadVector128(source + (long)x * 4), mask).Store(target + (long)x * 3);
+                    }
+                }
+
+                byte* s = source + (long)x * 4;
+                byte* t = target + (long)x * 3;
+                for (; x < width; x++, s += 4, t += 3)
+                {
+                    t[0] = s[blue];
+                    t[1] = s[1];
+                    t[2] = s[red];
+                }
+
+                for (int p = 0; p < padBytes; p++)
+                {
+                    t[p] = 0;
+                }
+            }
+        }
+
+        if (bands <= 1)
+        {
+            CopyBand(0, height);
+        }
+        else
+        {
+            Parallel.For(0, bands, band =>
+            {
+                int y0 = (int)((long)height * band / bands);
+                int y1 = (int)((long)height * (band + 1) / bands);
+                CopyBand(y0, y1);
+            });
+        }
     }
 
     public static MemoryStream SaveJPEG(SKBitmap bitmap, int quality,

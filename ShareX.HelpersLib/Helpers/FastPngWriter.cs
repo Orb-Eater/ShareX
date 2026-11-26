@@ -76,7 +76,8 @@ public static unsafe class FastPngWriter
         byte[] pixels = new byte[width * height * 4];
         fixed (byte* start = pixels)
         {
-            WriteOpaque(Stream.Null, start, width * 4, width, height, true, FastPngFilter.Adaptive, 2, bands: 2);
+            WriteOpaque(Stream.Null, start, width * 4, width, height, true, FastPngFilter.Adaptive, 2, bands: 2, alphaChannel: true);
+            WriteOpaque(Stream.Null, start, width * 4, width, height, true, FastPngFilter.Sub, 2, bands: 2, alphaChannel: false);
         }
     }
 
@@ -87,6 +88,7 @@ public static unsafe class FastPngWriter
     /// level is the zlib level 0-9 of .NET's own compressor. bands 0 = one per core, as far as the picture is big
     /// enough. Returns false, writing nothing, when the file would be larger than sizeLimit.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static bool WriteOpaque(Stream output, byte* pixels, int rowBytes, int width, int height, bool blueFirst,
         FastPngFilter filter, int level, int bands = 0, long sizeLimit = long.MaxValue, bool alphaChannel = false)
     {
@@ -163,6 +165,12 @@ public static unsafe class FastPngWriter
         {
             foreach (Band band in results) buffers.Return(band.Data);
             return false;
+        }
+
+        if (output is MemoryStream ms && ms.Length == 0 && fileSize <= int.MaxValue)
+        {
+            int needed = (int)fileSize;
+            if (ms.Capacity < needed) ms.Capacity = needed;
         }
 
         output.Write(Signature);
@@ -456,6 +464,7 @@ public static unsafe class FastPngWriter
         return sum1 | (sum2 << 16);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static void WriteChunk(Stream output, ReadOnlySpan<byte> type, ReadOnlySpan<byte> first, ReadOnlySpan<byte> second, ReadOnlySpan<byte> third = default)
     {
         Span<byte> number = stackalloc byte[4];
