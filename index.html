@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShareX 22.4.0 Fork Benchmarks — v21.0 vs Official v22.4 vs Fork (2026-11-26)</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --c-v21: #e59326;
+    --c-v22: #ef4444;
+    --c-prev: #38bdf8;
+    --c-live: #22c55e;
+    --c-seg-grab: #3b82f6;
+    --c-seg-clip: #14b8a6;
+    --c-seg-save: #a855f7;
+    --c-seg-wake: #f59e0b;
+    --ink: #e6edf3;
+    --ink-2: #8b949e;
+    --line: #30363d;
+    --surf: #161b22;
+    --surf-2: #21262d;
+    --pop: #1c2128;
+    --r: 12px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --c-v21: #c27803;
+      --c-v22: #dc2626;
+      --c-prev: #0284c7;
+      --c-live: #15803d;
+      --c-seg-grab: #2563eb;
+      --c-seg-clip: #0d9488;
+      --c-seg-save: #9333ea;
+      --c-seg-wake: #d97706;
+      --ink: #1f2328;
+      --ink-2: #59636e;
+      --line: #d0d7de;
+      --surf: #ffffff;
+      --surf-2: #f3f4f6;
+      --pop: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 24px 16px 40px;
+  }
+  .wrap {
+    width: 100%;
+    display: grid;
+    gap: 12px;
+  }
+
+  /* Header */
+  .hdr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 12px;
+  }
+  .hdr h1 {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.015em;
+  }
+  .hdr .meta {
+    font-size: 11px;
+    color: var(--ink-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .sub {
+    font-size: 12.5px;
+    color: var(--ink-2);
+    line-height: 1.45;
+    margin-top: 4px;
+  }
+  .sub a { color: var(--c-prev); text-decoration: none; }
+  .sub a:hover { text-decoration: underline; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    margin-top: 8px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .dot.dash { width: 14px; height: 0; border-top: 2px dashed var(--ink-2); border-radius: 0; }
+
+  /* KPI Strip */
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .kpi {
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 16px;
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+  .kpi .k-label { font-size: 11.5px; color: var(--ink-2); line-height: 1.2; }
+  .kpi .k-nums {
+    font-size: 16px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    flex-wrap: wrap;
+    line-height: 1.15;
+  }
+  .kpi .k-old { font-size: 12px; font-weight: 500; color: var(--ink-2); text-decoration: line-through; opacity: .85; }
+  .kpi .k-arrow { font-size: 11px; color: var(--ink-2); }
+  .kpi .k-new { color: var(--c-live); }
+  .kpi .k-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+  }
+  .kpi .k-sub { font-size: 10.5px; color: var(--ink-2); line-height: 1.25; }
+
+  .pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--c-live) 16%, transparent);
+    color: var(--c-live);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 16px;
+    min-width: 0;
+  }
+  .card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 10px;
+    margin-bottom: 10px;
+  }
+  h2 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .card-sub { font-size: 11.5px; color: var(--ink-2); }
+
+  /* Two-column grid */
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .col-inner { display: grid; gap: 0; align-content: start; }
+
+  /* Pipeline chart */
+  .pipe-group {
+    border-top: 1px solid var(--line);
+    padding: 10px 0 8px;
+  }
+  .pipe-group:first-of-type { border-top: 0; padding-top: 2px; }
+  .pipe-title {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 4px 8px;
+    margin-bottom: 6px;
+  }
+  .pipe-title b { font-size: 12.5px; font-weight: 600; }
+  .pipe-title small { font-size: 11px; color: var(--ink-2); }
+  .pipe-row {
+    display: grid;
+    grid-template-columns: 124px 1fr 78px;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+    font-size: 11.5px;
+  }
+  .pipe-lab {
+    color: var(--ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pipe-lab.hi { color: var(--ink); font-weight: 700; }
+  .pipe-track {
+    height: 14px;
+    background: color-mix(in srgb, var(--line) 42%, transparent);
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    position: relative;
+  }
+  .seg { height: 100%; min-width: 2px; }
+  .seg:not(:last-child) { border-right: 1px solid color-mix(in srgb, var(--surf) 75%, transparent); }
+  .pipe-val {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .pipe-breakdown {
+    font-size: 11px;
+    color: var(--ink-2);
+    margin: 4px 0 0 132px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.38;
+  }
+  .pipe-breakdown b { color: var(--ink); font-weight: 600; }
+
+  /* Comparison bar rows */
+  .m {
+    border-top: 1px solid var(--line);
+    padding: 7px 0 6px;
+  }
+  .m:first-child { border-top: 0; padding-top: 0; }
+  .mh {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .mh .what { font-weight: 600; line-height: 1.25; }
+  .mh .what small { display: block; font-size: 10.5px; font-weight: 400; color: var(--ink-2); }
+  .bars { margin-top: 4px; display: grid; gap: 3px; }
+  .br {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    align-items: center;
+    gap: 6px;
+    height: 14px;
+  }
+  .br-k { font-size: 10.5px; color: var(--ink-2); text-align: right; white-space: nowrap; }
+  .br-k.hi { color: var(--ink); font-weight: 700; }
+  .br-track { position: relative; height: 14px; display: flex; align-items: center; min-width: 0; }
+  .bar { height: 9px; border-radius: 0 3px 3px 0; min-width: 3px; flex: none; }
+  .bar.v21 { background: var(--c-v21); }
+  .bar.v22 { background: var(--c-v22); }
+  .bar.prev { background: var(--c-prev); }
+  .bar.live { background: var(--c-live); }
+  .bval {
+    margin-left: 6px;
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bval.hi { font-weight: 700; color: var(--c-live); }
+
+  /* Mini stat tiles */
+  .mini-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .mini {
+    background: var(--surf-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 9px;
+    min-width: 0;
+  }
+  .mini .ml { font-size: 10px; color: var(--ink-2); line-height: 1.2; }
+  .mini .mv { font-size: 11.5px; font-weight: 700; color: var(--c-live); font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; }
+  .mini .ms { font-size: 9.5px; color: var(--ink-2); line-height: 1.2; margin-top: 2px; }
+
+  /* Compact metric rows */
+  .kv-list { display: grid; gap: 0; }
+  .kv {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+  }
+  .kv:first-child { border-top: 0; padding-top: 0; }
+  .kv .k { color: var(--ink); line-height: 1.3; min-width: 0; }
+  .kv .k small { display: block; font-size: 10.5px; color: var(--ink-2); }
+  .kv .v { white-space: nowrap; flex: none; }
+
+  /* Verification chips */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  .chip {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: var(--surf-2);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip b { color: var(--c-live); }
+
+  /* Feature checklist */
+  ul.feat {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  ul.feat li {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    gap: 6px;
+    align-items: baseline;
+  }
+  ul.feat .ic { color: var(--c-live); font-weight: 700; }
+  ul.feat .ic.open { color: var(--c-seg-wake); }
+  ul.feat b { font-weight: 600; }
+  ul.feat small { color: var(--ink-2); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10.5px; }
+
+  .note {
+    font-size: 11px;
+    color: var(--ink-2);
+    line-height: 1.45;
+    margin: 8px 0 0;
+  }
+
+  /* Toggle buttons */
+  .tabs {
+    display: inline-flex;
+    background: var(--surf-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .tab {
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .tab.active {
+    background: var(--surf);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,.15);
+  }
+
+  /* Details table */
+  details { font-size: 11.5px; }
+  summary {
+    cursor: pointer;
+    color: var(--ink-2);
+    font-weight: 600;
+    user-select: none;
+  }
+  .tbl-wrap {
+    width: 100%;
+    overflow-x: auto;
+    margin-top: 10px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+  }
+  th, td {
+    text-align: left;
+    padding: 5px 6px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th { color: var(--ink-2); font-weight: 600; }
+
+  /* Tooltip */
+  .tip {
+    position: fixed;
+    pointer-events: none;
+    background: var(--pop);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    font-size: 11.5px;
+    padding: 7px 9px;
+    border-radius: 6px;
+    max-width: 290px;
+    opacity: 0;
+    transition: opacity .08s;
+    z-index: 20;
+    line-height: 1.4;
+    box-shadow: 0 4px 14px rgba(0,0,0,.28);
+  }
+
+  @media (max-width: 640px) {
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid2 { grid-template-columns: 1fr; }
+    .mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .mini-grid .mini:last-child { grid-column: 1 / -1; }
+    .pipe-row { grid-template-columns: 98px 1fr 68px; gap: 6px; }
+    .pipe-breakdown { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<div class="wrap">
+  <!-- Header -->
+  <div>
+    <div class="hdr">
+      <h1>ShareX v21.0 → 22.4.0 Speed Fork (2026-11-26)</h1>
+      <span class="meta">speed 07f7eeb9d · full 927ebb21e · text 452c927c0</span>
+    </div>
+    <div style="font-size:12.5px; font-weight:600; color:var(--c-live); margin-top:4px;">
+      Coded by Neon xHigh under 57 minutes | 8 minutes fixing bugs | All with 1 prompt
+    </div>
+    <div class="sub">
+      Measured on a Windows 11 dual-monitor desktop (<code>6200×1920</code>, 11.9 MP: one landscape + one 90°-rotated portrait, NVIDIA GPU) alongside earlier v21.0, official v22.4.0, and prior fork baselines on the same machine. Shorter bars are faster/lower. Hover any card or row for exact measurement context.
+      <br>Branches:
+      <a href="https://github.com/Orb-Eater/ShareX/tree/full-speed-build-22.4">full-speed-build-22.4</a> (speed/RAM only) ·
+      <a href="https://github.com/Orb-Eater/ShareX/tree/text-tool-22.4">text-tool-22.4</a> (editor features only) ·
+      <a href="https://github.com/Orb-Eater/ShareX/tree/speed-and-text-22.4">speed-and-text-22.4</a> (combined).
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--c-v21)"></i>ShareX v21.0 (WinForms/GDI+)</span>
+      <span><i class="dot" style="background:var(--c-v22)"></i>Official v22.4.0 (Avalonia)</span>
+      <span><i class="dot" style="background:var(--c-prev)"></i>Prev Fork (Nov 22–24)</span>
+      <span><i class="dot" style="background:var(--c-live)"></i>New Fork (Nov 26)</span>
+    </div>
+  </div>
+
+  <!-- Hero KPIs -->
+  <div class="kpis">
+    <div class="kpi" data-tip="<b>Full Desktop PrintScreen (6200×1920)</b><br>v21.0 (~12 MP, n=2): 668 ms.<br>Official v22 pre-fastPNG (n=4): 1,326 ms.<br>Prev Fork (n=2): 154 ms.<br>New Fork (warm median, n=5): <b>34.53 ms</b> to disk / <b>44.35 ms</b> clipboard (DXGI grab 6–7 ms, 0 fallbacks).">
+      <div class="k-label">Full Desktop → Disk</div>
+      <div class="k-nums"><span class="k-old">154</span><span class="k-arrow">→</span><span class="k-new">34.5 ms</span></div>
+      <div class="k-foot"><span class="k-sub">v21 668 · clip 44.4</span><span class="pill">4.5× / 19× v21</span></div>
+    </div>
+    <div class="kpi" data-tip="<b>Region Overlay Open (ShowCursor + DetectWindows + ShowMagnifier)</b><br>v21.0 warm: 330 ms (1st 460 ms).<br>Official v22.4.0 warm: 572 ms (1st 1,027 ms).<br>Prev Fork warm: 168 ms (1st 176 ms).<br>New Fork (6200×1920): <b>13.41 ms</b> visible pixel-poll (13.55 ms window, 34.91 ms cold, 7/7 window reuse).">
+      <div class="k-label">Region Overlay Open</div>
+      <div class="k-nums"><span class="k-old">168</span><span class="k-arrow">→</span><span class="k-new">13.4 ms</span></div>
+      <div class="k-foot"><span class="k-sub">v21 330 · 7/7 reuse</span><span class="pill">12.5× / 25× v21</span></div>
+    </div>
+    <div class="kpi" data-tip="<b>Combined Region Machine Wait (excl. drag)</b><br>Overlay visible pixel-poll + mouse release→disk.<br>v21.0 warm: 397 ms (1st 527 ms).<br>Official v22.4.0 warm: 893 ms (1st 1,348 ms).<br>Prev Fork warm: 228 ms (1st 236 ms).<br>New Fork: <b>31.71 ms</b> warm (13.41 + 18.30) · <b>69.33 ms</b> after 12 s idle trim.">
+      <div class="k-label">Region Machine Wait</div>
+      <div class="k-nums"><span class="k-old">228</span><span class="k-arrow">→</span><span class="k-new">31.7 ms</span></div>
+      <div class="k-foot"><span class="k-sub">12s wake 69.3 ms</span><span class="pill">7.2× / 12.5× v21</span></div>
+    </div>
+    <div class="kpi" data-tip="<b>Idle RAM (Private Working Set &amp; Commit)</b><br>v21.0 (15 s idle): 100 MB priv / 155 MB WS (368 MB after captures).<br>Official v22.4.0 (15 s idle): 57 MB Task Manager (149 MB after captures).<br>Prev Fork: 7.4 MB Task Manager (171.0 MB Commit baseline).<br>New Fork (tray + silent run): <b>9.0 MB</b> PrivateWS / <b>147.9 MB</b> Commit (post-13-capture 12 s idle: 9.08 / 169.12 MB).">
+      <div class="k-label">Idle RAM (PrivateWS)</div>
+      <div class="k-nums"><span class="k-old">100</span><span class="k-arrow">→</span><span class="k-new">9.0 MB</span></div>
+      <div class="k-foot"><span class="k-sub">Commit 147.9 MB</span><span class="pill">−23 MB Commit</span></div>
+    </div>
+  </div>
+
+  <!-- SECTION 1: END-TO-END CAPTURE LATENCY -->
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>End-to-End Capture Latency: 4-Build Progression</h2>
+        <div class="card-sub">Warm live desktop medians (Nov 26 fork) vs matched v21.0, official v22.4.0, and Nov 22–24 fork baselines</div>
+      </div>
+      <div class="tabs" id="pipeTabs">
+        <button class="tab active" data-mode="warm">Warm (To Disk)</button>
+        <button class="tab" data-mode="alt">Clipboard / 12s Wake</button>
+      </div>
+    </div>
+    <div class="legend" style="margin:0 0 6px;">
+      <span><i class="dot" style="background:var(--c-seg-grab)"></i>Grab / Overlay Open</span>
+      <span><i class="dot" style="background:var(--c-seg-clip)"></i>Clipboard / Parallel Save</span>
+      <span><i class="dot" style="background:var(--c-seg-save)"></i>PNG Encode &amp; Disk Save</span>
+      <span id="wakeLeg" style="display:none;"><i class="dot" style="background:var(--c-seg-wake)"></i>Post-Idle Wake / Clip Overhead</span>
+    </div>
+    <div id="pipelines"></div>
+    <p class="note">
+      <b>Notes:</b> PrintScreen grabs via warm DXGI Desktop Duplication in <b>6–7 ms</b> (0 fallbacks) and overlaps disk PNG writing with parallel SSSE3 HGLOBAL DIB clipboard preparation (<b>34.53 ms</b> disk / <b>44.35 ms</b> clipboard; cold 158.3 ms). Region Capture excludes human mouse-drag time and sums visible pixel-poll open + release→disk (<code>1922×1081</code> crop, cursor + window detection + magnifier enabled).
+    </p>
+  </div>
+
+  <!-- SECTION 2: DXGI + SPEED & MEMORY -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-head">
+        <h2>Live DXGI &amp; Speed Benchmarks</h2>
+        <span class="pill">0 DXGI fallbacks</span>
+      </div>
+      <div class="mini-grid">
+        <div class="mini" data-tip="<b>DxgiDesktopCapturer.TryCaptureToBitmap (6200×1920)</b><br>Warm median (n=5): 3.46 ms (cold 57.46 ms).<br>vs GDI BitBlt (2.976M sampled px): 99.18% exact, 0 non-opaque alpha.">
+          <div class="ml">DXGI 6200×1920</div>
+          <div class="mv">3.46 ms</div>
+          <div class="ms">99.18% GDI · 0 α err</div>
+        </div>
+        <div class="mini" data-tip="<b>DxgiDesktopCapturer.TryCaptureGpuSnapshot + Subrect Readback</b><br>GPU snapshot: 0.38 ms warm (2.67 ms cold).<br>1080p crop readback: 1.76 ms warm (3.44 ms cold).<br>32 px magnifier patch: 0.13 ms warm (1.56 ms cold).">
+          <div class="ml">Snap / Crop / Mag</div>
+          <div class="mv">0.38 / 1.76 / 0.13</div>
+          <div class="ms">ms (2 tiles, Rot90)</div>
+        </div>
+        <div class="mini" data-tip="<b>Post-TrimIdle() Wake (DXGI duplication re-creation)</b><br>TryCaptureGpuSnapshot: 8.35 ms.<br>TryCaptureToBitmap (6200×1920): 13.48 ms.">
+          <div class="ml">Post-TrimIdle Wake</div>
+          <div class="mv">8.35 / 13.48 ms</div>
+          <div class="ms">GPU snap / full</div>
+        </div>
+      </div>
+      <div id="speedBars" class="col-inner"></div>
+    </div>
+
+    <div class="card" style="display:grid; gap:10px; align-content:start;">
+      <div class="card-head" style="margin-bottom:0;">
+        <h2>Memory (RAM) &amp; Idle Stability</h2>
+        <span class="pill">ThreadsToKeepAlive=8</span>
+      </div>
+      <div id="ramBars" class="col-inner"></div>
+      <div style="border-top:1px solid var(--line); padding-top:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; gap:6px; margin-bottom:4px;">
+          <span style="font-size:11px; font-weight:600; white-space:nowrap;">Idle RAM over 60 min</span>
+          <span style="font-size:10px; color:var(--ink-2); text-align:right;">Re-check drops spike · 8 kept threads prevents it</span>
+        </div>
+        <svg id="ramSvg" viewBox="0 0 320 120" width="100%" height="120" style="display:block;" role="img" aria-label="Idle RAM over 60 minutes: no trim 60 MB, old fork jumps to 22.9 MB at min 30, 5-min re-check drops to 6.4 MB, new fork 9.0 MB PrivateWS / 147.9 MB Commit"></svg>
+        <div class="legend" style="margin-top:4px; font-size:10px;">
+          <span><i class="dot dash"></i>No trim (60 MB)</span>
+          <span><i class="dot" style="background:var(--c-v22)"></i>Old fork (22.9)</span>
+          <span><i class="dot" style="background:var(--c-prev)"></i>Re-check (6.4)</span>
+          <span><i class="dot" style="background:var(--c-live)"></i>New fork (9.0 MB)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: CLIPBOARD E2E + ARCHITECTURE -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-head">
+        <h2>Post-Exit Clipboard E2E &amp; Verification</h2>
+        <span class="pill">3/3 flows PASS</span>
+      </div>
+      <div class="kv-list" id="clipList"></div>
+      <div class="chips">
+        <span class="chip">Editor suite <b>2,181/2,181</b></span>
+        <span class="chip">PNG suite <b>4,049/4,049</b></span>
+        <span class="chip">DXGI/ANGLE tests <b>4/4</b></span>
+        <span class="chip">Code reviews <b>3/3 PASS</b></span>
+        <span class="chip">Release x64 <b>0W / 0E</b></span>
+        <span class="chip">Log errors <b>0</b></span>
+      </div>
+      <p class="note">
+        <b>Methodology note:</b> All measurements were collected on one Windows 11 x64 desktop (100% display scaling, NVIDIA GPU, dual monitors). Not tested on HDR displays, other GPU vendors, ARM64, or mixed-DPI multi-monitor setups.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>2026-11-26 Architecture &amp; Text Tool</h2>
+        <span class="card-sub">4 new commits on speed &amp; combined branches</span>
+      </div>
+      <ul class="feat">
+        <li><span class="ic">✓</span><span><b>Capture Hot-Path Wins (<code>6075f209a</code>):</b> O(1) <code>QueryFullProcessImageName</code> (4.2×), cached <code>TaskSettings.Copy</code> (7.3×), synchronous toast-close fast path, active-window timing log.</span></li>
+        <li><span class="ic">✓</span><span><b>Parallel SSSE3 DIB &amp; Shared PNG (<code>1f69438f7</code>):</b> single PNG encode shared across disk &amp; clipboard; direct-to-HGLOBAL 24-bpp DIB writer (<b>1,626 → 31 ms</b>, 10/10 formats byte-exact).</span></li>
+        <li><span class="ic">✓</span><span><b>Warm DXGI + Zero-Copy ANGLE (<code>0b3ad9db0</code>):</b> persistent <code>IDXGIOutputDuplication</code> across rotated multi-mon, GPU-shared overlay surface, reusable window (<code>7/7</code>), fast subrect crop &amp; 32 px magnifier, 1×1 idle swapchain trim.</span></li>
+        <li><span class="ic">✓</span><span><b>3-Reviewer Hardening (<code>07f7eeb9d</code>):</b> ref-counted <code>AdapterSession</code>, COM release order, TDR/scRGB recovery, idle-trim race guards, clipboard owner/0-byte resilience.</span></li>
+        <li><span class="ic">✓</span><span><b>Text tool &amp; slider (separate branch <code>452c927c0</code>, <code>2,181/2,181</code>):</b> WYSIWYG <code>#2E2E2E</code> box, space jump <code>5.1→0.1 px</code>, wobble <code>±1.1→0.00 px</code>, growth jump <code>77→0 px</code>, rotated typing p95 <code>10.0→0.8 ms</code>, emoji/fringes fixed, clickable slider number.</span></li>
+        <li><span class="ic open">○</span><span><b>Known limits:</b> <small>Built on release <code>v22.4.0</code> (.NET 10), not <code>develop</code> (.NET 11); multi-line centred text keeps legacy centring; slight sub-pixel finish shift at 125% DPI.</small></span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Collapsible full data table -->
+  <div class="card" style="padding:12px 16px;">
+    <details>
+      <summary>All measured numbers across all 4 builds (click to expand)</summary>
+      <div class="tbl-wrap">
+        <table id="fullTbl">
+          <thead>
+            <tr><th>Metric</th><th>v21.0</th><th>Official v22.4.0</th><th>Prev Fork (Nov 22–24)</th><th>New Fork (Nov 26)</th><th>Test method</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+  </div>
+
+  <p class="note" style="text-align:center; margin-top:4px;">
+    Changes were written and independently reviewed by AI agents for a user, with the user's go-ahead. Page prepared by Gemini 4 Neon (Antigravity agent), 2026-11-26. Source: <a href="https://github.com/Orb-Eater/ShareX" style="color:var(--c-prev);text-decoration:none;">github.com/Orb-Eater/ShareX</a> (GPL v3).
+  </p>
+</div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+const tip = document.getElementById('tip');
+function showTip(e, html) {
+  tip.innerHTML = html;
+  tip.style.opacity = 1;
+  moveTip(e);
+}
+function moveTip(e) {
+  const x = Math.min(e.clientX + 12, window.innerWidth - 300);
+  const y = Math.min(e.clientY + 14, window.innerHeight - 130);
+  tip.style.left = Math.max(6, x) + 'px';
+  tip.style.top = Math.max(6, y) + 'px';
+}
+function hideTip() { tip.style.opacity = 0; }
+function bindTip(el, html) {
+  el.addEventListener('mouseenter', e => showTip(e, html));
+  el.addEventListener('mousemove', moveTip);
+  el.addEventListener('mouseleave', hideTip);
+}
+document.querySelectorAll('[data-tip]').forEach(el => bindTip(el, el.dataset.tip));
+
+const pipeData = [
+  {
+    title: 'Full Desktop PrintScreen (6200×1920)',
+    sub: '11.9 MP dual-monitor · 0 DXGI fallbacks',
+    gainWarm: '4.5× vs Prev · 19× vs v21',
+    gainAlt: '3.5× vs Prev · 15× vs v21',
+    summaryWarm: 'New Fork: <b>6–7 ms</b> DXGI grab + parallel PNG/DIB → <b>34.53 ms</b> disk (v21: 668 · v22.4: 1,326 · Prev: 154 ms)',
+    summaryAlt: 'New Fork: <b>44.35 ms</b> warm clipboard · <b>54.35 ms</b> disk / <b>68.37 ms</b> clip after 12 s idle trim (cold: 158.3 ms)',
+    rows: [
+      { lab: 'v21.0', dot: '--c-v21', grab: 154, clip: 261, save: 253, altAdd: 67, totWarm: 668, totAlt: 735,
+        src: 'ShareX application logs (~12 MP, n=2: 443 & 892 ms hotkey→save; 509 & 961 ms hotkey→done).' },
+      { lab: 'Official v22.4', dot: '--c-v22', grab: 91, clip: 786, save: 449, altAdd: 174, totWarm: 1326, totAlt: 1500,
+        src: 'Official v22 logs pre-fastPNG (n=4: median 1,326 ms hotkey→save, 1,500 ms hotkey→done).' },
+      { lab: 'Prev Fork', dot: '--c-prev', grab: 72, clip: 58, save: 25, altAdd: 6, totWarm: 154, totAlt: 160,
+        src: 'Prior fork build logs (6200×1920, n=2: 149 & 159 ms hotkey→save; 160 ms hotkey→done).' },
+      { lab: 'New Fork', dot: '--c-live', hi: true, grab: 7, clip: 14, save: 13.53, altAdd: 9.82, totWarm: 34.53, totAlt: 44.35,
+        src: 'Live desktop benchmark (warm median, n=5): 34.53 ms disk, 44.35 ms clipboard (DXGI grab 6–7 ms, 0 fallbacks; 12 s wake 54.35 ms disk / 68.37 ms clip).' }
+    ]
+  },
+  {
+    title: 'Region Overlay Open (Hotkey → Visible Pixels)',
+    sub: 'Cursor + Window Detection + Magnifier enabled',
+    gainWarm: '12.5× vs Prev · 25× vs v21',
+    gainAlt: '3.6× vs Prev · 9.3× vs v21',
+    summaryWarm: 'New Fork: <b>13.41 ms</b> visible pixel-poll (<b>13.55 ms</b> window, <b>7/7 reused</b>; v21: 330 · v22.4: 572 · Prev: 168 ms)',
+    summaryAlt: 'New Fork: <b>34.91 ms</b> cold pixel-poll · <b>49.29 ms</b> after 12 s idle trim (vs 1st-shot v21: 460 · v22.4: 1,027 · Prev: 176 ms)',
+    rows: [
+      { lab: 'v21.0', dot: '--c-v21', grab: 330, clip: 0, save: 0, altAdd: 130, totWarm: 330, totAlt: 460,
+        src: '5120×2520 pixel-poll benchmark: warm 330 ms, 1st shot 460 ms.' },
+      { lab: 'Official v22.4', dot: '--c-v22', grab: 572, clip: 0, save: 0, altAdd: 455, totWarm: 572, totAlt: 1027,
+        src: '5120×2520 pixel-poll benchmark: warm 572 ms, 1st shot 1,027 ms.' },
+      { lab: 'Prev Fork', dot: '--c-prev', grab: 168, clip: 0, save: 0, altAdd: 8, totWarm: 168, totAlt: 176,
+        src: '5120×2520 pixel-poll benchmark: warm 168 ms, 1st shot 176 ms.' },
+      { lab: 'New Fork', dot: '--c-live', hi: true, grab: 13.41, clip: 0, save: 0, altAdd: 35.88, totWarm: 13.41, totAlt: 49.29,
+        src: 'Live desktop benchmark (6200×1920): warm pixel-poll 13.41 ms (window 13.55 ms), cold 34.91 ms, 12 s post-idle wake 49.29 ms, 7/7 window reuse.' }
+    ]
+  },
+  {
+    title: 'Region Combined Machine Wait (Open + Release → Disk)',
+    sub: '1922×1081 crop, excluding human drag time',
+    gainWarm: '7.2× vs Prev · 12.5× vs v21',
+    gainAlt: '3.4× vs Prev · 7.6× vs v21',
+    summaryWarm: 'New Fork: <b>13.41 ms</b> open + <b>18.30 ms</b> release→disk (<b>18.40 ms</b> clip) = <b>31.71 ms</b> warm (Prev: 228 ms)',
+    summaryAlt: 'New Fork: <b>69.33 ms</b> after 12 s idle trim (49.29 open + 20.03 release→disk; vs Prev 1st-shot 236 ms)',
+    rows: [
+      { lab: 'v21.0', dot: '--c-v21', grab: 330, clip: 39, save: 28, altAdd: 130, totWarm: 397, totAlt: 527,
+        src: 'Warm 330 open + 67 ms ≥1 MP release→save (n=78) = 397 ms; 1st shot 460 + 67 = 527 ms.' },
+      { lab: 'Official v22.4', dot: '--c-v22', grab: 572, clip: 245, save: 76, altAdd: 455, totWarm: 893, totAlt: 1348,
+        src: 'Warm 572 open + ~321 ms pre-fastPNG copy+save = 893 ms; 1st shot 1,027 + 321 = 1,348 ms.' },
+      { lab: 'Prev Fork', dot: '--c-prev', grab: 168, clip: 42, save: 18, altAdd: 8, totWarm: 228, totAlt: 236,
+        src: 'Warm 168 open + 60 ms ≥1 MP release→save = 228 ms; 1st shot 176 + 60 = 236 ms.' },
+      { lab: 'New Fork', dot: '--c-live', hi: true, grab: 13.41, clip: 9.2, save: 9.1, altAdd: 37.62, totWarm: 31.71, totAlt: 69.33,
+        src: 'Live desktop benchmark: warm 13.41 open + 18.30 release→disk = 31.71 ms (release→clip 18.40 ms); 12 s post-idle wake = 69.33 ms (49.29 + 20.03).' }
+    ]
+  }
+];
+
+let pipeMode = 'warm';
+function renderPipelines() {
+  const host = document.getElementById('pipelines');
+  host.innerHTML = '';
+  document.getElementById('wakeLeg').style.display = pipeMode === 'alt' ? 'inline-flex' : 'none';
+  for (const grp of pipeData) {
+    const maxVal = Math.max(...grp.rows.map(r => pipeMode === 'alt' ? r.totAlt : r.totWarm));
+    const gEl = document.createElement('div');
+    gEl.className = 'pipe-group';
+    gEl.innerHTML = `<div class="pipe-title"><div><b>${grp.title}</b> <small>· ${grp.sub}</small></div><span class="pill">${pipeMode === 'alt' ? grp.gainAlt : grp.gainWarm}</span></div>`;
+    for (const r of grp.rows) {
+      const tot = pipeMode === 'alt' ? r.totAlt : r.totWarm;
+      const segSum = r.grab + r.clip + r.save + (pipeMode === 'alt' ? r.altAdd : 0);
+      const scale = Math.max((tot / maxVal) * 100, 1.4);
+      const wGrab = (r.grab / segSum) * scale;
+      const wClip = (r.clip / segSum) * scale;
+      const wSave = (r.save / segSum) * scale;
+      const wAlt = pipeMode === 'alt' ? (r.altAdd / segSum) * scale : 0;
+      const row = document.createElement('div');
+      row.className = 'pipe-row';
+      let segs = '';
+      if (wGrab > 0) segs += `<div class="seg" style="width:${wGrab.toFixed(2)}%;background:var(--c-seg-grab)"></div>`;
+      if (wClip > 0) segs += `<div class="seg" style="width:${wClip.toFixed(2)}%;background:var(--c-seg-clip)"></div>`;
+      if (wSave > 0) segs += `<div class="seg" style="width:${wSave.toFixed(2)}%;background:var(--c-seg-save)"></div>`;
+      if (wAlt > 0) segs += `<div class="seg" style="width:${wAlt.toFixed(2)}%;background:var(--c-seg-wake)"></div>`;
+      const valTxt = tot >= 100 ? Math.round(tot).toLocaleString('en-US') + ' ms' : tot.toFixed(2) + ' ms';
+      row.innerHTML =
+        `<div class="pipe-lab${r.hi ? ' hi' : ''}"><i class="dot" style="background:var(${r.dot})"></i>${r.lab}</div>` +
+        `<div class="pipe-track">${segs}</div>` +
+        `<div class="pipe-val" style="color:${r.hi ? 'var(--c-live)' : 'var(--ink)'}">${valTxt}</div>`;
+      bindTip(row, `<b>${grp.title} — ${r.lab}</b><br>${pipeMode === 'alt' ? 'Clipboard / Wake / 1st' : 'Warm To Disk'}: <b>${valTxt}</b><br><span style="opacity:.85">${r.src}</span>`);
+      gEl.appendChild(row);
+    }
+    const cap = document.createElement('div');
+    cap.className = 'pipe-breakdown';
+    cap.innerHTML = pipeMode === 'alt' ? grp.summaryAlt : grp.summaryWarm;
+    gEl.appendChild(cap);
+    host.appendChild(gEl);
+  }
+}
+renderPipelines();
+document.querySelectorAll('#pipeTabs .tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#pipeTabs .tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    pipeMode = btn.dataset.mode;
+    renderPipelines();
+  });
+});
+
+const speedMetrics = [
+  { what: 'Offline copy + save benchmark (6200×1920)', sub: '100% byte-exact DIB across all 10 formats', gain: '52× faster',
+    bars: [
+      { k: 'v22.4', cls: 'v22', v: 1626, txt: '1,626 ms (917 copy + 710 save)' },
+      { k: 'New Fork', cls: 'live', v: 31, txt: '31 ms (18 copy + 13 save · DIB 5.3)', hi: true }
+    ], src: 'Offline save+clipboard benchmark on 6200×1920 desktop PNG: DIB 294.9→5.3 ms, transparency check 215.9→1.8 ms, PNG save 709.5→13.4 ms.' },
+  { what: 'Region Release → Saved (1922×1081 crop)', sub: 'ShowCursor enabled', gain: '3.3× vs Prev',
+    bars: [
+      { k: 'v21.0', cls: 'v21', v: 67, txt: '67 ms (≥1 MP logs)' },
+      { k: 'Prev Fork', cls: 'prev', v: 60, txt: '60 ms logs' },
+      { k: 'New Fork', cls: 'live', v: 18.3, txt: '18.30 ms (clip 18.40 ms)', hi: true }
+    ], src: 'Live desktop benchmark warm median (n=5): 18.30 ms to disk, 18.40 ms clipboard, 20.03 ms after 12 s idle trim.' },
+  { what: 'App startup time (application logs)', sub: 'Start → ready, 5/5 hotkeys registered', gain: '3.2× vs v21',
+    bars: [
+      { k: 'v21.0', cls: 'v21', v: 3313, txt: '3,313 ms (n=135)' },
+      { k: 'v22.2', cls: 'v22', v: 4065, txt: '4,065 ms' },
+      { k: 'Prev Fork', cls: 'prev', v: 1386, txt: '1,386 ms (n=3)' },
+      { k: 'New Fork', cls: 'live', v: 1046, txt: '1,046 ms (unelevated)', hi: true }
+    ], src: 'Application startup log: 1,046 ms startup, unelevated, 5/5 hotkeys registered, 0 log errors.' },
+  { what: 'Active Window → Save (1080p logs)', sub: 'O(1) QueryFullProcessImageName + cached Copy', gain: '4.1× vs v21',
+    bars: [
+      { k: 'v21.0', cls: 'v21', v: 161, txt: '161 ms (all sizes 173)' },
+      { k: 'v22.4', cls: 'v22', v: 320, txt: '~320 ms (early logs 210)' },
+      { k: 'Fork', cls: 'prev', v: 39, txt: '39 ms (all sizes 42 ms)' }
+    ], src: 'Application logs (v21 n=394 / n=737; fork n=8 / n=24). Hot-path optimizations retained in Nov 26 build.' },
+  { what: 'Overlay Ctrl+C UI wait (6200×1920)', sub: 'Clipboard persists after hard process exit', gain: '45× faster',
+    bars: [
+      { k: 'v22.4', cls: 'v22', v: 684, txt: '684 ms (lost on exit)' },
+      { k: 'Prev Fork', cls: 'prev', v: 17, txt: '17 ms (5120×2520)' },
+      { k: 'New Fork', cls: 'live', v: 15, txt: '15 ms max (intact post-kill)', hi: true }
+    ], src: 'Live clipboard test (6200×1920): longest overlay UI wait 15 ms; after hard kill, owner=none, PNG 5,447 KB (1 ms) + DIB 24bpp 34,875 KB (10 ms).' }
+];
+
+function renderBarGroup(elId, list) {
+  const host = document.getElementById(elId);
+  for (const m of list) {
+    const max = Math.max(...m.bars.map(b => b.v));
+    const div = document.createElement('div');
+    div.className = 'm';
+    let html = `<div class="mh"><div class="what">${m.what}${m.sub ? `<small>${m.sub}</small>` : ''}</div><span class="pill">${m.gain}</span></div><div class="bars">`;
+    for (const b of m.bars) {
+      const pct = Math.max((b.v / max) * 40, 1.8);
+      html += `<div class="br"><span class="br-k${b.hi ? ' hi' : ''}">${b.k}</span><div class="br-track"><div class="bar ${b.cls}" style="width:${pct.toFixed(1)}%"></div><span class="bval${b.hi ? ' hi' : ''}">${b.txt}</span></div></div>`;
+    }
+    html += `</div>`;
+    div.innerHTML = html;
+    bindTip(div, `<b>${m.what}</b><br>${m.bars.map(b => `${b.k}: ${b.txt}`).join('<br>')}<br><span style="opacity:.85">${m.src}</span>`);
+    host.appendChild(div);
+  }
+}
+renderBarGroup('speedBars', speedMetrics);
+
+const ramMetrics = [
+  { what: 'Idle RAM (PrivateWS / Commit)', sub: 'Tray icon + silent start vs historical baselines', gain: '11× vs v21',
+    bars: [
+      { k: 'v21.0', cls: 'v21', v: 100, txt: '100 MB priv (155 WS)' },
+      { k: 'v22.4', cls: 'v22', v: 57, txt: '57 MB TM (166 WS)' },
+      { k: 'Prev Fork', cls: 'prev', v: 7.4, txt: '7.4 MB TM (171 Commit)' },
+      { k: 'New Fork', cls: 'live', v: 9.0, txt: '9.0 MB PWS · 147.9 Commit', hi: true }
+    ], src: 'Idle working-set check: 9.0 MB PrivateWS / 147.9 MB Commit (steady 9.9 / 148.2 MB).' },
+  { what: 'RAM after captures (idle release)', sub: '12 s post-13-capture trim releases DXGI & swapchain', gain: '40× vs v21',
+    bars: [
+      { k: 'v21.0', cls: 'v21', v: 368, txt: '368 MB priv (432 WS)' },
+      { k: 'v22.4', cls: 'v22', v: 149, txt: '149 MB TM (487 priv)' },
+      { k: 'Prev Fork', cls: 'prev', v: 6.4, txt: '6.4 MB TM (1 h idle)' },
+      { k: 'New Fork', cls: 'live', v: 9.08, txt: '9.08 MB (12 s) · 2.77 (24 s)', hi: true }
+    ], src: '12 s idle after 13 live captures: 9.08 MB PrivateWS / 169.12 MB Commit; second 12 s idle: 2.77 MB PrivateWS.' },
+  { what: 'First capture after 3 h idle & Thumb leak', sub: 'Smart VirtualUnlock keeps code pages resident', gain: '46× / 8.6×',
+    bars: [
+      { k: 'Old trim', cls: 'v22', v: 134, txt: '134 MB heap · 3,706 ms wake' },
+      { k: 'Fork', cls: 'live', v: 15.5, txt: '15.5 MB heap · 74–80 ms wake', hi: true }
+    ], src: 'Overnight 3 h idle runs (3,706→74–80 ms) + thumbnail direct-decode leak fix (134→15.5 MB); retained in Nov 26 build.' }
+];
+renderBarGroup('ramBars', ramMetrics);
+
+(function drawRamSvg() {
+  const svg = document.getElementById('ramSvg'), NS = 'http://www.w3.org/2000/svg';
+  const oldFork = [9.8,9.9,10.0,10.3,10.8,11.1,11.2,11.2,11.4,11.4,11.4,11.5,11.5,11.5,12.1,12.0,12.1,12.1,12.2,12.2,12.3,12.3,12.4,12.4,12.4,12.4,12.5,12.6,12.6,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.8,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9,22.9];
+  const liveFork = [10.3,10.3,9.7,10.0,10.7,11.6,11.7,11.7,11.7,11.8,11.8,11.8,11.9,11.9,12.0,12.5,12.5,12.6,12.7,12.7,12.8,12.8,12.8,12.9,12.9,12.9,12.9,13.0,13.0,20.9,20.9,20.9,20.9,20.9,3.8,4.5,4.6,4.7,4.9,5.2,5.2,5.3,5.4,5.5,5.7,5.8,5.8,5.9,5.9,6.0,6.0,6.1,6.1,6.2,6.2,6.2,6.3,6.4,6.4,6.4];
+  const L = 26, R = 274, T = 8, B = 100, YMAX = 65;
+  const x = m => L + (m - 1) / 59 * (R - L);
+  const y = v => B - (v / YMAX) * (B - T);
+  const el = (tag, attrs, txt) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (txt != null) e.textContent = txt;
+    svg.appendChild(e);
+    return e;
+  };
+  for (const v of [0, 20, 40, 60]) {
+    el('line', { x1: L, x2: R, y1: y(v), y2: y(v), stroke: 'var(--line)', 'stroke-width': 1 });
+    el('text', { x: L - 4, y: y(v) + 3, 'text-anchor': 'end', 'font-size': 8.5, fill: 'var(--ink-2)' }, v);
+  }
+  for (const m of [1, 15, 30, 45, 60]) {
+    el('text', { x: x(m), y: B + 12, 'text-anchor': 'middle', 'font-size': 8.5, fill: 'var(--ink-2)' }, m === 60 ? '60m' : m + 'm');
+  }
+  el('line', { x1: L, x2: R, y1: y(60), y2: y(60), stroke: 'var(--ink-2)', 'stroke-width': 1.4, 'stroke-dasharray': '4 3', opacity: .7 });
+  el('text', { x: R + 4, y: y(60) + 3, 'font-size': 8.5, fill: 'var(--ink-2)' }, '60 MB');
+  const p = arr => arr.map((v, i) => (i ? 'L' : 'M') + x(i + 1).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+  el('path', { d: p(oldFork), fill: 'none', stroke: 'var(--c-v22)', 'stroke-width': 1.7 });
+  el('path', { d: p(liveFork), fill: 'none', stroke: 'var(--c-prev)', 'stroke-width': 1.9 });
+  el('text', { x: R + 4, y: y(22.9) + 3, 'font-size': 9, 'font-weight': 600, fill: 'var(--c-v22)' }, '22.9');
+  el('text', { x: R + 4, y: y(6.4) + 9, 'font-size': 9, 'font-weight': 700, fill: 'var(--c-prev)' }, '6.4');
+  el('circle', { cx: R, cy: y(9.0), r: 3.3, fill: 'var(--c-live)' });
+  el('text', { x: R + 5, y: y(9.0) - 3, 'font-size': 9, 'font-weight': 700, fill: 'var(--c-live)' }, '9.0');
+  el('text', { x: x(30) - 3, y: y(26), 'text-anchor': 'end', 'font-size': 8, fill: 'var(--ink-2)' }, 'min-30 GC ↓');
+  const cross = el('line', { x1: 0, x2: 0, y1: T, y2: B, stroke: 'var(--ink-2)', 'stroke-width': 1, opacity: 0 });
+  const hit = el('rect', { x: L, y: T, width: R - L, height: B - T, fill: 'transparent' });
+  hit.addEventListener('pointermove', e => {
+    const box = svg.getBoundingClientRect();
+    const px = (e.clientX - box.left) * 320 / box.width;
+    const m = Math.max(1, Math.min(60, Math.round((px - L) / (R - L) * 59 + 1)));
+    cross.setAttribute('x1', x(m)); cross.setAttribute('x2', x(m)); cross.setAttribute('opacity', .5);
+    showTip(e, `<b>Minute ${m} idle</b><br>Old fork: ${oldFork[m-1]} MB<br>5-min re-check: ${liveFork[m-1]} MB<br>New fork: 9.0 MB PrivateWS / 147.9 MB Commit (ThreadsToKeepAlive=8)`);
+  });
+  hit.addEventListener('pointerleave', () => { hideTip(); cross.setAttribute('opacity', 0); });
+})();
+
+const clipItems = [
+  ['Odd-width Region (1923×1082)', '0 px err · Edge PNG · Paint ok', 'PASS',
+    'After ShareX exits: owner=0x0, PNG vs CF_DIB & CF_DIBV5 0 mismatches across 2,080,686 px; Edge pastes exact PNG bytes; Paint paste verified.'],
+  ['Full Desktop PrintScreen (6200×1920)', '0 px err · Edge PNG · Paint 0 diffs', 'PASS',
+    'After ShareX exits: owner=0x0, PNG vs CF_DIB & CF_DIBV5 0 mismatches across 11,904,000 px; Edge exact PNG; Paint 100.00% exact (0 diffs).'],
+  ['Region Overlay Ctrl+C (6200×1920)', '0 px err · Edge PNG · Paint 0 diffs', 'PASS',
+    'After ShareX exits: owner=0x0, PNG vs CF_DIB & CF_DIBV5 0 mismatches across 11,904,000 px; Edge exact PNG; Paint 100.00% exact (0 diffs).'],
+  ['Overlay hard-kill persistence check', '15 ms UI wait · PNG + 24bpp DIB ok', 'PASS',
+    'Live 6200×1920 test: longest overlay UI wait 15 ms; after hard process exit: owner=none, PNG (1 ms) + 24bpp DIB (10 ms) intact.']
+];
+const cl = document.getElementById('clipList');
+for (const [k, sub, badge, src] of clipItems) {
+  const row = document.createElement('div');
+  row.className = 'kv';
+  row.innerHTML = `<div class="k"><b>${k}</b><small>${sub}</small></div><div class="v"><span class="pill">${badge}</span></div>`;
+  bindTip(row, `<b>${k}</b><br>${src}`);
+  cl.appendChild(row);
+}
+
+const tableRows = [
+  ['Full Desktop PrintScreen → Disk', '668 ms (n=2)', '1,326 ms (n=4)', '154 ms (n=2)', '34.53 ms warm · 54.35 ms 12s wake', 'Live desktop benchmark & app logs'],
+  ['Full Desktop PrintScreen → Clipboard', '—', '—', '—', '44.35 ms warm · 68.37 ms 12s wake', 'Live desktop benchmark (grab 6–7 ms, 0 fallbacks)'],
+  ['Region Overlay Open (warm / cold)', '330 / 460 ms', '572 / 1,027 ms', '168 / 176 ms', '13.41 / 34.91 ms (13.55 win, 7/7 reuse)', 'Live pixel-poll benchmark'],
+  ['Region Release → Saved (≥1 MP / 1922×1081)', '67 ms (n=78)', '~321 ms', '60 ms', '18.30 ms warm (rel→clip 18.40 ms)', 'Live desktop benchmark & app logs'],
+  ['Region Combined Machine Wait (warm / wake)', '397 / 527 ms', '893 / 1,348 ms', '228 / 236 ms', '31.71 ms warm · 69.33 ms 12s wake', 'Live desktop benchmark (excl. drag)'],
+  ['Live DXGI Probe (6200×1920)', '—', '—', '—', '3.46 ms full (99.18% GDI, 0 α err)', 'DXGI vs GDI BitBlt probe (cold 57.46 ms)'],
+  ['DXGI GPU Snap / 1080p Crop / 32px Mag', '—', '—', '—', '0.38 / 1.76 / 0.13 ms (wake 8.35/13.48)', 'Live DXGI probe (2 tiles, Rot90)'],
+  ['Offline Copy + Save (6200×1920)', '—', '1,626 ms (DIB 295)', '—', '31 ms (DIB 5.3 ms, 10/10 byte-exact)', 'Offline save + DIB benchmark'],
+  ['Active Window → Saved (1080p / all)', '161 / 173 ms', '~320 / 210 ms', '39 / 42 ms', 'Hot-path retained (O(1) + cached Copy)', 'Application logs'],
+  ['App Startup Time', '3,313 ms (n=135)', '4,065 ms (v22.2)', '1,386 ms (n=3)', '1,046 ms (unelevated, 5/5 hotkeys)', 'Application startup logs'],
+  ['First Capture After 3 h Idle', '—', '3,706 ms (old trim)', '74–80 ms', 'Smart VirtualUnlock retained', 'Overnight 3 h idle runs'],
+  ['PNG Encode 1080p / 5120×2520 (L1 all)', '— (GDI+)', '50.4 / 276.2 ms', '4.1 / 16.2 ms', '4,049/4,049 PNG checks PASS', 'Multi-core PNG test suite'],
+  ['Overlay Ctrl+C UI Wait (hard-kill test)', '—', '684 ms (lost)', '17 ms (5120×2520)', '15 ms max (6200×1920, intact post-kill)', 'Live clipboard hard-kill test'],
+  ['Post-Exit Clipboard E2E (Edge + Paint)', '—', 'Lost on exit', 'Overlay Ctrl+C ok', '3/3 PASS (0 mismatches, owner=0x0)', 'Dual-target clipboard E2E test'],
+  ['Idle RAM (PrivateWS / Commit)', '100 MB priv', '57 MB TM', '7.4 MB TM (171 Cmt)', '9.0 MB PWS / 147.9 MB Commit', 'Idle working-set check'],
+  ['RAM After Captures (steady / 12 s idle)', '368 MB priv', '149 MB TM', '6.4 MB (1 h idle)', '9.08 MB (12 s) · 2.77 MB (24 s)', 'Post-13-capture live run'],
+  ['Thumbnail Heap Leak (8 full shots)', '—', '134 MB', '15.5 MB', '15.5 MB (direct decode retained)', 'Heap allocation check'],
+  ['Automated Verification Suites', '—', '2,113 / 2,181 ed.', '2,181 / 2,181 ed.', '2,181 ed · 4,049 PNG · 4/4 DXGI · 0W/0E', 'Offline + live desktop checks']
+];
+const tb = document.querySelector('#fullTbl tbody');
+for (const r of tableRows) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = r.map((c, i) => {
+    if (i === 4) return `<td style="font-weight:700;color:var(--c-live)">${c}</td>`;
+    if (i === 3) return `<td style="color:var(--c-prev)">${c}</td>`;
+    return `<td>${c}</td>`;
+  }).join('');
+  tb.appendChild(tr);
+}
+</script>
+</body>
+</html>

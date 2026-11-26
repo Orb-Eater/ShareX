@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 430" width="820" height="430" role="img" aria-label="ShareX v21.0 vs Official v22.4.0 vs Speed Fork Benchmarks">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; }
+      .card { fill: #161b22; stroke: #30363d; stroke-width: 1; }
+      .title { font: 700 18px system-ui, -apple-system, Segoe UI, sans-serif; fill: #e6edf3; }
+      .sub { font: 400 11.5px system-ui, -apple-system, Segoe UI, sans-serif; fill: #8b949e; }
+      .h2 { font: 700 13px system-ui, -apple-system, Segoe UI, sans-serif; fill: #e6edf3; }
+      .lbl { font: 500 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #8b949e; }
+      .lbl-hi { font: 700 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #e6edf3; }
+      .val { font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #e6edf3; }
+      .val-hi { font: 700 11px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #22c55e; }
+      .kpi-lbl { font: 500 11px system-ui, -apple-system, Segoe UI, sans-serif; fill: #8b949e; }
+      .kpi-old { font: 500 11.5px ui-monospace, Consolas, monospace; fill: #8b949e; text-decoration: line-through; }
+      .kpi-new { font: 700 17px ui-monospace, Consolas, monospace; fill: #22c55e; }
+      .pill-bg { fill: #122d1f; }
+      .pill-tx { font: 700 10px system-ui, -apple-system, Segoe UI, sans-serif; fill: #22c55e; }
+      .track { fill: #21262d; }
+      .v21 { fill: #e59326; }
+      .v22 { fill: #ef4444; }
+      .prev { fill: #38bdf8; }
+      .live { fill: #22c55e; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="820" height="430" rx="14"/>
+
+  <!-- Header -->
+  <text x="24" y="30" class="title">ShareX v21.0 → 22.4.0 Speed Fork (2026-11-26)</text>
+  <text x="24" y="47" class="val-hi">Coded by Neon xHigh under 57 minutes | 8 minutes fixing bugs | All with 1 prompt</text>
+  <text x="24" y="61" class="sub">Windows 11 · 6200×1920 dual-monitor desktop (landscape + 90° rotated portrait) · NVIDIA GPU · Shorter bars = faster / lower RAM</text>
+
+  <!-- Legend -->
+  <rect x="24" y="69" width="10" height="10" rx="2" class="v21"/><text x="39" y="78" class="lbl">v21.0 (WinForms)</text>
+  <rect x="148" y="69" width="10" height="10" rx="2" class="v22"/><text x="163" y="78" class="lbl">Official v22.4.0</text>
+  <rect x="270" y="69" width="10" height="10" rx="2" class="prev"/><text x="285" y="78" class="lbl">Prev Fork (Nov 22–24)</text>
+  <rect x="424" y="69" width="10" height="10" rx="2" class="live"/><text x="439" y="78" class="lbl-hi">New Fork (Nov 26 · 07f7eeb9d / 927ebb21e)</text>
+
+  <!-- KPI Row -->
+  <g transform="translate(24,88)">
+    <rect width="184" height="72" rx="10" class="card"/>
+    <text x="14" y="21" class="kpi-lbl">Full Desktop → Disk</text>
+    <text x="14" y="44" class="kpi-new">34.5 ms</text>
+    <text x="98" y="43" class="kpi-old">668 v21</text>
+    <rect x="14" y="51" width="104" height="15" rx="4" class="pill-bg"/>
+    <text x="20" y="62" class="pill-tx">19× v21 · 4.5× prev</text>
+  </g>
+  <g transform="translate(220,88)">
+    <rect width="184" height="72" rx="10" class="card"/>
+    <text x="14" y="21" class="kpi-lbl">Region Overlay Open</text>
+    <text x="14" y="44" class="kpi-new">13.4 ms</text>
+    <text x="98" y="43" class="kpi-old">572 v22</text>
+    <rect x="14" y="51" width="112" height="15" rx="4" class="pill-bg"/>
+    <text x="20" y="62" class="pill-tx">42× v22 · 12.5× prev</text>
+  </g>
+  <g transform="translate(416,88)">
+    <rect width="184" height="72" rx="10" class="card"/>
+    <text x="14" y="21" class="kpi-lbl">Region Machine Wait</text>
+    <text x="14" y="44" class="kpi-new">31.7 ms</text>
+    <text x="98" y="43" class="kpi-old">893 v22</text>
+    <rect x="14" y="51" width="118" height="15" rx="4" class="pill-bg"/>
+    <text x="20" y="62" class="pill-tx">28× v22 · 12s wake 69</text>
+  </g>
+  <g transform="translate(612,88)">
+    <rect width="184" height="72" rx="10" class="card"/>
+    <text x="14" y="21" class="kpi-lbl">Idle RAM (PrivateWS)</text>
+    <text x="14" y="44" class="kpi-new">9.0 MB</text>
+    <text x="88" y="43" class="kpi-old">100 v21</text>
+    <rect x="14" y="51" width="116" height="15" rx="4" class="pill-bg"/>
+    <text x="20" y="62" class="pill-tx">11× v21 · 148 Commit</text>
+  </g>
+
+  <!-- Left Card: Capture Latency -->
+  <g transform="translate(24,174)">
+    <rect width="380" height="232" rx="10" class="card"/>
+    <text x="14" y="24" class="h2">Capture Latency (Warm Medians)</text>
+
+    <!-- Group 1: PrintScreen -->
+    <text x="14" y="46" class="lbl-hi">Full Desktop PrintScreen → Disk (6200×1920)</text>
+    <text x="14" y="63" class="lbl">v21.0</text>
+    <rect x="92" y="54" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="54" width="106" height="11" rx="3" class="v21"/>
+    <text x="310" y="63" class="val">668 ms</text>
+
+    <text x="14" y="79" class="lbl">v22.4.0</text>
+    <rect x="92" y="70" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="70" width="210" height="11" rx="3" class="v22"/>
+    <text x="310" y="79" class="val">1,326 ms</text>
+
+    <text x="14" y="95" class="lbl">Prev Fork</text>
+    <rect x="92" y="86" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="86" width="24" height="11" rx="3" class="prev"/>
+    <text x="310" y="95" class="val">154 ms</text>
+
+    <text x="14" y="111" class="lbl-hi">New Fork</text>
+    <rect x="92" y="102" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="102" width="6" height="11" rx="3" class="live"/>
+    <text x="310" y="111" class="val-hi">34.5 ms</text>
+
+    <!-- Group 2: Region Open -->
+    <text x="14" y="140" class="lbl-hi">Region Overlay Open (Hotkey → Visible Pixels)</text>
+    <text x="14" y="157" class="lbl">v21.0</text>
+    <rect x="92" y="148" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="148" width="121" height="11" rx="3" class="v21"/>
+    <text x="310" y="157" class="val">330 ms</text>
+
+    <text x="14" y="173" class="lbl">v22.4.0</text>
+    <rect x="92" y="164" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="164" width="210" height="11" rx="3" class="v22"/>
+    <text x="310" y="173" class="val">572 ms</text>
+
+    <text x="14" y="189" class="lbl">Prev Fork</text>
+    <rect x="92" y="180" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="180" width="62" height="11" rx="3" class="prev"/>
+    <text x="310" y="189" class="val">168 ms</text>
+
+    <text x="14" y="205" class="lbl-hi">New Fork</text>
+    <rect x="92" y="196" width="210" height="11" rx="3" class="track"/>
+    <rect x="92" y="196" width="5" height="11" rx="3" class="live"/>
+    <text x="310" y="205" class="val-hi">13.4 ms</text>
+  </g>
+
+  <!-- Right Card: Save + RAM + Checks -->
+  <g transform="translate(416,174)">
+    <rect width="380" height="232" rx="10" class="card"/>
+    <text x="14" y="24" class="h2">Save/Clipboard, Memory &amp; Verification</text>
+
+    <!-- Group 3: Copy + Save -->
+    <text x="14" y="46" class="lbl-hi">Offline Copy + Save (6200×1920, byte-exact DIB)</text>
+    <text x="14" y="63" class="lbl">v22.4.0</text>
+    <rect x="92" y="54" width="206" height="11" rx="3" class="track"/>
+    <rect x="92" y="54" width="206" height="11" rx="3" class="v22"/>
+    <text x="306" y="63" class="val">1,626 ms</text>
+
+    <text x="14" y="79" class="lbl-hi">New Fork</text>
+    <rect x="92" y="70" width="206" height="11" rx="3" class="track"/>
+    <rect x="92" y="70" width="5" height="11" rx="3" class="live"/>
+    <text x="306" y="79" class="val-hi">31 ms (52×)</text>
+
+    <!-- Group 4: Post-Capture RAM -->
+    <text x="14" y="108" class="lbl-hi">RAM After Captures (Idle Release)</text>
+    <text x="14" y="125" class="lbl">v21.0</text>
+    <rect x="92" y="116" width="206" height="11" rx="3" class="track"/>
+    <rect x="92" y="116" width="206" height="11" rx="3" class="v21"/>
+    <text x="306" y="125" class="val">368 MB</text>
+
+    <text x="14" y="141" class="lbl">v22.4.0</text>
+    <rect x="92" y="132" width="206" height="11" rx="3" class="track"/>
+    <rect x="92" y="132" width="83" height="11" rx="3" class="v22"/>
+    <text x="306" y="141" class="val">149 MB</text>
+
+    <text x="14" y="157" class="lbl-hi">New Fork</text>
+    <rect x="92" y="148" width="206" height="11" rx="3" class="track"/>
+    <rect x="92" y="148" width="6" height="11" rx="3" class="live"/>
+    <text x="306" y="157" class="val-hi">9.1 MB (12 s)</text>
+
+    <!-- Verification Chips -->
+    <line x1="14" y1="176" x2="366" y2="176" stroke="#30363d" stroke-width="1"/>
+    <text x="14" y="195" class="lbl-hi">Verification &amp; Quality Gates:</text>
+    <text x="14" y="213" class="sub">✓ 0 DXGI fallbacks · ✓ 3/3 Post-exit Clipboard E2E (Edge + Paint)</text>
+    <text x="14" y="226" class="sub">✓ 2,181/2,181 Editor · ✓ 4,049/4,049 PNG · ✓ Release x64 0W/0E</text>
+  </g>
+</svg>
