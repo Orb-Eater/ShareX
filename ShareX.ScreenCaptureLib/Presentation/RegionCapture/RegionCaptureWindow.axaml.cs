@@ -124,6 +124,7 @@ public partial class RegionCaptureWindow : Window
     private double _captureToolbarCenterX = double.NaN;
     private double _captureToolbarTop = double.NaN;
     private Size _positionedCaptureToolbarSize;
+    private Size _positionedClientSize;
     private bool _draggingCaptureToolbar;
     private Point _captureToolbarDragOffset;
     private int _imageWidth;
@@ -196,6 +197,7 @@ public partial class RegionCaptureWindow : Window
         _captureToolbarCenterX = double.NaN;
         _captureToolbarTop = double.NaN;
         _positionedCaptureToolbarSize = default;
+        _positionedClientSize = default;
         _regionToolActive = true;
         ResetCreationModifiers();
 
@@ -404,6 +406,7 @@ public partial class RegionCaptureWindow : Window
     internal async Task TrimSwapchainForIdleAsync()
     {
         if (_isPermanentlyClosed || !_hasOpenedOnce || IsVisible || _request != null) return;
+        int trimGeneration = _sessionGeneration;
         try
         {
             Topmost = false;
@@ -425,7 +428,7 @@ public partial class RegionCaptureWindow : Window
         }
         finally
         {
-            if (!_isPermanentlyClosed && _request == null)
+            if (!_isPermanentlyClosed && _request == null && _sessionGeneration == trimGeneration)
             {
                 Hide();
             }
@@ -581,11 +584,11 @@ public partial class RegionCaptureWindow : Window
 
         if (_viewModel == null || !ReferenceEquals(_viewModel.Options, _request.ImageEditorOptions))
         {
-            if (_viewModel != null)
+            MainViewModel? previousViewModel = _viewModel;
+            if (previousViewModel != null)
             {
-                _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
-                _viewModel.ToolSelectionRequested -= OnAnnotationToolSelected;
-                _viewModel.Dispose();
+                previousViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+                previousViewModel.ToolSelectionRequested -= OnAnnotationToolSelected;
             }
 
             _viewModel = new MainViewModel(_request.ImageEditorOptions)
@@ -610,6 +613,7 @@ public partial class RegionCaptureWindow : Window
                 _editorWorkspace.DataContext = _viewModel;
             }
             _annotationToolbar.DataContext = _viewModel.ToolbarAdapter;
+            previousViewModel?.Dispose();
         }
 
         if (!_workspaceInitializedOnce)
@@ -1352,6 +1356,7 @@ public partial class RegionCaptureWindow : Window
         _captureToolbarCenterX = centerX;
         _captureToolbarTop = top;
         _positionedCaptureToolbarSize = default;
+        _positionedClientSize = default;
         PositionCaptureToolbar();
     }
 
@@ -1373,16 +1378,23 @@ public partial class RegionCaptureWindow : Window
         double toolbarHeight = _captureToolbar.Bounds.Height > 0
             ? _captureToolbar.Bounds.Height
             : _captureToolbar.DesiredSize.Height;
+        double clientWidth = ClientSize.Width;
+        double clientHeight = ClientSize.Height;
         if (!double.IsFinite(toolbarWidth) || toolbarWidth <= 0 ||
+            !double.IsFinite(clientWidth) || clientWidth <= 1 ||
+            !double.IsFinite(clientHeight) || clientHeight <= 1 ||
             (Math.Abs(toolbarWidth - _positionedCaptureToolbarSize.Width) < 0.01 &&
-             Math.Abs(toolbarHeight - _positionedCaptureToolbarSize.Height) < 0.01))
+             Math.Abs(toolbarHeight - _positionedCaptureToolbarSize.Height) < 0.01 &&
+             Math.Abs(clientWidth - _positionedClientSize.Width) < 0.01 &&
+             Math.Abs(clientHeight - _positionedClientSize.Height) < 0.01))
         {
             return;
         }
 
         _positionedCaptureToolbarSize = new Size(toolbarWidth, toolbarHeight);
-        double maxLeft = Math.Max(0, ClientSize.Width - toolbarWidth);
-        double maxTop = Math.Max(0, ClientSize.Height - toolbarHeight);
+        _positionedClientSize = new Size(clientWidth, clientHeight);
+        double maxLeft = Math.Max(0, clientWidth - toolbarWidth);
+        double maxTop = Math.Max(0, clientHeight - toolbarHeight);
         AvaloniaCanvas.SetLeft(_captureToolbar, Math.Clamp(_captureToolbarCenterX - toolbarWidth / 2d, 0, maxLeft));
         AvaloniaCanvas.SetTop(_captureToolbar, Math.Clamp(_captureToolbarTop, 0, maxTop));
     }
@@ -1898,7 +1910,7 @@ public partial class RegionCaptureWindow : Window
                 for (int y = 0; y < count; y++)
                 {
                     uint* dstRow = (uint*)(destination + y * framebuffer.RowBytes);
-                    int sy = Math.Clamp(centerY + y - radius, left == right ? 0 : top, bottom - 1) - top;
+                    int sy = Math.Clamp(centerY + y - radius, top, bottom - 1) - top;
                     int patchRow = sy * patchW;
                     for (int x = 0; x < count; x++)
                     {

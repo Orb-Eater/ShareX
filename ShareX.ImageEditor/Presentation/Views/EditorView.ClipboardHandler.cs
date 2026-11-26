@@ -161,6 +161,7 @@ namespace ShareX.ImageEditor.Presentation.Views
         private void PasteInternalShape()
         {
             if (_clipboardAnnotation == null) return;
+            EnsureCpuWorkspaceImage();
 
             // Clone again from clipboard so we can paste multiple times
             var newAnnotation = _clipboardAnnotation.Clone();

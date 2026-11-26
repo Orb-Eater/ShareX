@@ -54,6 +54,8 @@ public static unsafe class DxgiDesktopCapturer
     private const int DXGI_ERROR_WAIT_TIMEOUT = unchecked((int)0x887A0027);
     private const int DXGI_ERROR_SESSION_DISCONNECTED = unchecked((int)0x887A0028);
     private const int DXGI_ERROR_UNSUPPORTED = unchecked((int)0x887A0004);
+    private const int DXGI_ERROR_DEVICE_REMOVED = unchecked((int)0x887A0005);
+    private const int DXGI_ERROR_DEVICE_RESET = unchecked((int)0x887A0007);
     private const int DXGI_ERROR_NOT_CURRENTLY_AVAILABLE = unchecked((int)0x887A0022);
     private const int E_ACCESSDENIED = unchecked((int)0x80070005);
 
@@ -129,7 +131,7 @@ public static unsafe class DxgiDesktopCapturer
             catch (Exception ex)
             {
                 DebugHelper.WriteException(ex, "DXGI desktop capture failed; falling back to GDI.");
-                ReleaseAllDuplicationsLocked();
+                HandleCaptureExceptionLocked(ex);
                 return null;
             }
         }
@@ -236,7 +238,7 @@ public static unsafe class DxgiDesktopCapturer
             catch (Exception ex)
             {
                 DebugHelper.WriteException(ex, "DXGI GPU snapshot capture failed; falling back.");
-                ReleaseAllDuplicationsLocked();
+                HandleCaptureExceptionLocked(ex);
                 return null;
             }
         }
@@ -308,7 +310,8 @@ public static unsafe class DxgiDesktopCapturer
                     try
                     {
                         using IDXGIOutput6 output6 = output.QueryInterface<IDXGIOutput6>();
-                        isHdr = output6.Description1.ColorSpace == ColorSpaceType.RgbFullG2084NoneP2020;
+                        ColorSpaceType cs = output6.Description1.ColorSpace;
+                        isHdr = cs == ColorSpaceType.RgbFullG2084NoneP2020 || cs == ColorSpaceType.RgbFullG10NoneP709;
                     }
                     catch
                     {
@@ -381,6 +384,7 @@ public static unsafe class DxgiDesktopCapturer
 
             IDXGIOutputDuplication dupl = slot.Duplication!;
             bool acquired = false;
+            bool releaseTransient = false;
             IDXGIResource? resource = null;
 
             try
@@ -392,7 +396,11 @@ public static unsafe class DxgiDesktopCapturer
                     acquired = true;
                     if (frameInfo.LastPresentTime != 0)
                     {
-                        if (!CopyDesktopResourceToCacheLocked(slot, resource!)) return false;
+                        if (!CopyDesktopResourceToCacheLocked(slot, resource!))
+                        {
+                            releaseTransient = true;
+                            return false;
+                        }
                         slot.HasInitialFrame = true;
                         return true;
                     }
@@ -404,10 +412,10 @@ public static unsafe class DxgiDesktopCapturer
                     }
 
                     // Newly created duplication gave a pointer-only frame first: release and wait briefly for first desktop image.
-                    dupl.ReleaseFrame();
-                    acquired = false;
                     resource?.Dispose();
                     resource = null;
+                    dupl.ReleaseFrame();
+                    acquired = false;
                     return TryAcquireInitialFrameLocked(slot);
                 }
 
@@ -426,7 +434,18 @@ public static unsafe class DxgiDesktopCapturer
                 if (code == DXGI_ERROR_ACCESS_LOST)
                 {
                     slot.ReleaseDuplication();
+                    if (_factory == null || !_factory.IsCurrent)
+                    {
+                        DisposeAllLocked();
+                        return false;
+                    }
                     continue; // Retry once on transient mode/desktop access loss.
+                }
+
+                if (code == DXGI_ERROR_DEVICE_REMOVED || code == DXGI_ERROR_DEVICE_RESET)
+                {
+                    DisposeAllLocked();
+                    return false;
                 }
 
                 if (code == DXGI_ERROR_SESSION_DISCONNECTED || code == E_ACCESSDENIED)
@@ -440,11 +459,15 @@ public static unsafe class DxgiDesktopCapturer
             }
             finally
             {
+                resource?.Dispose();
                 if (acquired)
                 {
                     try { dupl.ReleaseFrame(); } catch { }
                 }
-                resource?.Dispose();
+                if (releaseTransient)
+                {
+                    slot.ReleaseTransient();
+                }
             }
         }
 
@@ -456,41 +479,64 @@ public static unsafe class DxgiDesktopCapturer
         IDXGIOutputDuplication? dupl = slot.Duplication;
         if (dupl == null) return false;
 
-        for (int attempt = 0; attempt < 3; attempt++)
+        // Try an immediate short wait before DwmFlush, then at most one post-DwmFlush retry (~36 ms max)
+        // so a completely static secondary monitor falls back quickly instead of stalling 120-150 ms.
+        int[] timeouts = [16, 20];
+        for (int attempt = 0; attempt < timeouts.Length; attempt++)
         {
-            DwmFlush();
+            if (attempt > 0)
+            {
+                DwmFlush();
+            }
             IDXGIResource? resource = null;
             bool acquired = false;
+            bool releaseTransient = false;
             try
             {
-                SharpGen.Runtime.Result hr = dupl.AcquireNextFrame(35, out OutduplFrameInfo info, out resource);
+                SharpGen.Runtime.Result hr = dupl.AcquireNextFrame((uint)timeouts[attempt], out OutduplFrameInfo info, out resource);
                 if (hr.Success)
                 {
                     acquired = true;
                     if (info.LastPresentTime != 0)
                     {
-                        if (!CopyDesktopResourceToCacheLocked(slot, resource!)) return false;
+                        if (!CopyDesktopResourceToCacheLocked(slot, resource!))
+                        {
+                            releaseTransient = true;
+                            return false;
+                        }
                         slot.HasInitialFrame = true;
                         return true;
                     }
                 }
                 else if (hr.Code != DXGI_ERROR_WAIT_TIMEOUT)
                 {
-                    slot.ReleaseDuplication();
+                    if (hr.Code == DXGI_ERROR_DEVICE_REMOVED || hr.Code == DXGI_ERROR_DEVICE_RESET)
+                    {
+                        DisposeAllLocked();
+                    }
+                    else
+                    {
+                        slot.ReleaseDuplication();
+                    }
                     return false;
                 }
             }
             finally
             {
+                resource?.Dispose();
                 if (acquired)
                 {
                     try { dupl.ReleaseFrame(); } catch { }
                 }
-                resource?.Dispose();
+                if (releaseTransient)
+                {
+                    slot.ReleaseTransient();
+                }
             }
         }
 
-        // Static output produced no initial frame in time; fall back to GDI rather than returning a black frame.
+        // Static output produced no initial frame in time; release duplication and fall back cleanly to GDI.
+        slot.ReleaseDuplication();
         return false;
     }
 
@@ -503,6 +549,27 @@ public static unsafe class DxgiDesktopCapturer
             return false;
         }
 
+        // Reconcile actual texture dimensions against expected rotation so already-rotated or unexpected surfaces never OOB.
+        int w = (int)desc.Width;
+        int h = (int)desc.Height;
+        bool rotated90 = slot.Rotation is ModeRotation.Rotate90 or ModeRotation.Rotate270;
+        if (rotated90)
+        {
+            if (slot.Bounds.Width != slot.Bounds.Height && w == slot.Bounds.Width && h == slot.Bounds.Height)
+            {
+                // Driver delivered an already-rotated desktop image matching desktop bounds.
+                slot.Rotation = ModeRotation.Identity;
+            }
+            else if (w != slot.Bounds.Height || h != slot.Bounds.Width)
+            {
+                return false;
+            }
+        }
+        else if (w != slot.Bounds.Width || h != slot.Bounds.Height)
+        {
+            return false;
+        }
+
         if (slot.LastFrameTexture == null ||
             slot.LastFrameTexture.Description.Width != desc.Width ||
             slot.LastFrameTexture.Description.Height != desc.Height)
@@ -510,8 +577,8 @@ public static unsafe class DxgiDesktopCapturer
             slot.LastFrameTexture?.Dispose();
             slot.StagingTexture?.Dispose();
             slot.StagingTexture = null;
-            slot.TexWidth = (int)desc.Width;
-            slot.TexHeight = (int)desc.Height;
+            slot.TexWidth = w;
+            slot.TexHeight = h;
 
             Texture2DDescription cacheDesc = new()
             {
@@ -549,13 +616,22 @@ public static unsafe class DxgiDesktopCapturer
             {
                 using IDXGIOutput1 output1 = output.QueryInterface<IDXGIOutput1>();
                 slot.Duplication = output1.DuplicateOutput(slot.Adapter.Device);
+                ModeRotation duplRot = slot.Duplication.Description.Rotation;
+                if (duplRot is ModeRotation.Identity or ModeRotation.Rotate90 or ModeRotation.Rotate180 or ModeRotation.Rotate270)
+                {
+                    slot.Rotation = duplRot;
+                }
                 slot.HasInitialFrame = false;
                 return true;
             }
             catch (SharpGen.Runtime.SharpGenException ex)
             {
                 hresult = ex.HResult;
-                if (hresult != E_ACCESSDENIED && hresult != DXGI_ERROR_NOT_CURRENTLY_AVAILABLE && hresult != DXGI_ERROR_UNSUPPORTED)
+                if (hresult == DXGI_ERROR_DEVICE_REMOVED || hresult == DXGI_ERROR_DEVICE_RESET)
+                {
+                    DisposeAllLocked();
+                }
+                else if (hresult != E_ACCESSDENIED && hresult != DXGI_ERROR_NOT_CURRENTLY_AVAILABLE && hresult != DXGI_ERROR_UNSUPPORTED)
                 {
                     DebugHelper.WriteLine($"DXGI DuplicateOutput failed on {slot.DeviceName}: 0x{hresult:X8}");
                 }
@@ -647,6 +723,7 @@ public static unsafe class DxgiDesktopCapturer
                 {
                     Rectangle inter = Rectangle.Intersect(captureRect, tile.Bounds);
                     if (inter.IsEmpty) continue;
+                    if (tile.Adapter.Device == null || tile.Adapter.Context == null) continue;
                     coveredArea += (long)inter.Width * inter.Height;
 
                     int localX = inter.X - tile.Bounds.X;
@@ -660,11 +737,11 @@ public static unsafe class DxgiDesktopCapturer
                     // Each intersecting tile gets its own reusable staging texture slot on the adapter so multi-monitor crops
                     // never overwrite or dispose an earlier tile's staging texture before ExecuteMappedReadbackJobs maps them.
                     ID3D11Texture2D staging = tile.Adapter.EnsureSubrectStagingTexture(jobs.Count, boxW, boxH);
-                    tile.Adapter.Context!.CopySubresourceRegion(staging, 0, 0, 0, 0, tile.Texture, 0, srcBox);
+                    tile.Adapter.Context.CopySubresourceRegion(staging, 0, 0, 0, 0, tile.Texture, 0, srcBox);
 
                     // The cropped data sits at (0,0) in staging with dimensions (boxW x boxH).
                     Box mappedBox = new(0, 0, 0, boxW, boxH, 1);
-                    jobs.Add(new ReadbackJob(tile.Adapter.Context!, staging, mappedBox,
+                    jobs.Add(new ReadbackJob(tile.Adapter.Context, staging, mappedBox,
                         inter.X - captureRect.X, inter.Y - captureRect.Y,
                         inter.Width, inter.Height, tile.Rotation));
                 }
@@ -703,6 +780,7 @@ public static unsafe class DxgiDesktopCapturer
             {
                 Rectangle inter = Rectangle.Intersect(patchRect, tile.Bounds);
                 if (inter.IsEmpty) continue;
+                if (tile.Adapter.Device == null || tile.Adapter.Context == null) continue;
 
                 int localX = inter.X - tile.Bounds.X;
                 int localY = inter.Y - tile.Bounds.Y;
@@ -712,7 +790,7 @@ public static unsafe class DxgiDesktopCapturer
                 int boxH = srcBox.Bottom - srcBox.Top;
 
                 ID3D11Texture2D staging = tile.Adapter.EnsurePatchStagingTexture(boxW, boxH);
-                ID3D11DeviceContext ctx = tile.Adapter.Context!;
+                ID3D11DeviceContext ctx = tile.Adapter.Context;
                 ctx.CopySubresourceRegion(staging, 0, 0, 0, 0, tile.Texture, 0, srcBox);
                 if (ctx.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None, out MappedSubresource mapped).Failure)
                 {
@@ -983,6 +1061,16 @@ public static unsafe class DxgiDesktopCapturer
         int capturedEpoch = epoch;
         int capturedSize = byteCount;
         byte[] capturedBuffer = buffer;
+        int released = 0;
+
+        void ReleaseOnce()
+        {
+            if (Interlocked.Exchange(ref released, 1) == 0)
+            {
+                if (handle.IsAllocated) handle.Free();
+                ReturnPooledBuffer(capturedBuffer, capturedSize, capturedEpoch);
+            }
+        }
 
         SKBitmap bitmap = new();
         bool installed = false;
@@ -992,17 +1080,10 @@ public static unsafe class DxgiDesktopCapturer
                 new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Unpremul),
                 pixelPtr,
                 stride,
-                (_, _) =>
-                {
-                    handle.Free();
-                    ReturnPooledBuffer(capturedBuffer, capturedSize, capturedEpoch);
-                });
+                (_, _) => ReleaseOnce());
 
             if (!installed)
             {
-                handle.Free();
-                ReturnPooledBuffer(capturedBuffer, capturedSize, capturedEpoch);
-                bitmap.Dispose();
                 throw new InvalidOperationException("Unable to install pooled pixel buffer into SKBitmap.");
             }
 
@@ -1012,8 +1093,7 @@ public static unsafe class DxgiDesktopCapturer
         {
             if (!installed)
             {
-                if (handle.IsAllocated) handle.Free();
-                ReturnPooledBuffer(capturedBuffer, capturedSize, capturedEpoch);
+                ReleaseOnce();
                 bitmap.Dispose();
             }
             throw;
@@ -1046,6 +1126,42 @@ public static unsafe class DxgiDesktopCapturer
         }
     }
 
+    private static void HandleCaptureExceptionLocked(Exception ex)
+    {
+        bool deviceLost = ex.HResult == DXGI_ERROR_DEVICE_REMOVED || ex.HResult == DXGI_ERROR_DEVICE_RESET;
+        if (!deviceLost)
+        {
+            foreach (AdapterSession adapter in _adapters)
+            {
+                if (adapter.Device != null)
+                {
+                    try
+                    {
+                        if (adapter.Device.DeviceRemovedReason.Failure)
+                        {
+                            deviceLost = true;
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        deviceLost = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (deviceLost || _factory == null || !_factory.IsCurrent)
+        {
+            DisposeAllLocked();
+        }
+        else
+        {
+            ReleaseAllDuplicationsLocked();
+        }
+    }
+
     private static void ReleaseAllDuplicationsLocked()
     {
         foreach (OutputSlot slot in _outputs)
@@ -1064,13 +1180,29 @@ public static unsafe class DxgiDesktopCapturer
 
         foreach (AdapterSession adapter in _adapters)
         {
-            adapter.Dispose();
+            adapter.RequestDisposeLocked();
         }
         _adapters.Clear();
 
         _factory?.Dispose();
         _factory = null;
         _topologyInitialized = false;
+    }
+
+    internal static void AddTileAdapterReference(AdapterSession adapter)
+    {
+        lock (SyncLock)
+        {
+            adapter.AddSnapshotRefLocked();
+        }
+    }
+
+    internal static void ReleaseTileAdapterReference(AdapterSession adapter)
+    {
+        lock (SyncLock)
+        {
+            adapter.ReleaseSnapshotRefLocked();
+        }
     }
 
     internal sealed class AdapterSession : IDisposable
@@ -1081,8 +1213,34 @@ public static unsafe class DxgiDesktopCapturer
         private readonly List<(ID3D11Texture2D Tex, int W, int H)> _subrectStagings = [];
         private ID3D11Texture2D? _patchStaging;
         private int _patchW, _patchH;
+        private int _activeSnapshots;
+        private bool _disposeRequested;
+        private bool _disposed;
 
         public AdapterSession(IDXGIAdapter1 adapter) => Adapter = adapter;
+
+        public void AddSnapshotRefLocked()
+        {
+            _activeSnapshots++;
+        }
+
+        public void ReleaseSnapshotRefLocked()
+        {
+            if (_activeSnapshots > 0) _activeSnapshots--;
+            if (_disposeRequested && _activeSnapshots == 0)
+            {
+                Dispose();
+            }
+        }
+
+        public void RequestDisposeLocked()
+        {
+            _disposeRequested = true;
+            if (_activeSnapshots == 0)
+            {
+                Dispose();
+            }
+        }
 
         public bool EnsureDevice()
         {
@@ -1189,6 +1347,8 @@ public static unsafe class DxgiDesktopCapturer
 
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
             foreach (var entry in _subrectStagings)
             {
                 entry.Tex?.Dispose();
@@ -1211,7 +1371,7 @@ public static unsafe class DxgiDesktopCapturer
         public uint OutputIndex { get; } = outputIndex;
         public string DeviceName { get; } = deviceName;
         public Rectangle Bounds { get; } = bounds;
-        public ModeRotation Rotation { get; } = rotation;
+        public ModeRotation Rotation { get; set; } = rotation;
         public int TexWidth { get; set; } = texWidth;
         public int TexHeight { get; set; } = texHeight;
         public bool IsHdr { get; } = isHdr;
@@ -1271,6 +1431,7 @@ public static unsafe class DxgiDesktopCapturer
 /// <summary>One monitor's frozen shared D3D11 snapshot texture inside a <see cref="DxgiGpuDesktopSnapshot"/>.</summary>
 public sealed class DxgiGpuOutputTile : IDisposable
 {
+    private bool _disposed;
     internal DxgiDesktopCapturer.AdapterSession Adapter { get; }
     internal ID3D11Texture2D Texture { get; }
     public IntPtr SharedHandle { get; }
@@ -1289,11 +1450,15 @@ public sealed class DxgiGpuOutputTile : IDisposable
         Rotation = rotation;
         TexWidth = texWidth;
         TexHeight = texHeight;
+        DxgiDesktopCapturer.AddTileAdapterReference(adapter);
     }
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         Texture.Dispose();
+        DxgiDesktopCapturer.ReleaseTileAdapterReference(Adapter);
     }
 }
 

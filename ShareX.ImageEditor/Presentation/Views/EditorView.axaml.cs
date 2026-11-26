@@ -1098,7 +1098,8 @@ namespace ShareX.ImageEditor.Presentation.Views
             _materializeCpuSource = null;
             _onCpuSourceMaterialized = null;
             _cancelPendingImageInsertion?.Invoke();
-            CancelActiveInteractionOrSelection();
+            for (int i = 0; i < 8 && CancelActiveInteractionOrSelection(); i++) { }
+            _zoomController.ResetScrollViewerOffset();
             ClearEffectPreviewCache();
             ReleaseAnnotationDisplayBitmaps();
 

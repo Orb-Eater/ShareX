@@ -142,17 +142,52 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
     /// </summary>
     public static void DrainPendingGpuCleanup(ISkiaSharpApiLease lease)
     {
-        if (PendingCleanup.IsEmpty) return;
+        // Only drain on a real GPU/EGL Skia target so software RenderTargetBitmap frames never discard GL/EGL handles.
+        if (PendingCleanup.IsEmpty || lease.GrContext == null) return;
 
-        List<TileBinding> batch = [];
+        AngleInterop? interop = _interop;
+        if (interop == null) return;
+
+        IntPtr currentDisplay = IntPtr.Zero;
+        try
+        {
+            using ISkiaSharpPlatformGraphicsApiLease? probe = lease.TryLeasePlatformGraphicsApi();
+            if (probe?.Context is EglContext eglProbe)
+            {
+                currentDisplay = eglProbe.Display.Handle;
+            }
+        }
+        catch
+        {
+            return;
+        }
+        if (currentDisplay == IntPtr.Zero) return;
+
+        List<TileBinding> matching = [];
+        List<TileBinding>? deferred = null;
         while (PendingCleanup.TryDequeue(out TileBinding? binding))
         {
-            batch.Add(binding);
+            if (binding.EglDisplay == currentDisplay || binding.EglDisplay == IntPtr.Zero)
+            {
+                matching.Add(binding);
+            }
+            else
+            {
+                (deferred ??= []).Add(binding);
+            }
         }
 
-        if (batch.Count == 0) return;
+        if (deferred != null)
+        {
+            foreach (TileBinding other in deferred)
+            {
+                PendingCleanup.Enqueue(other);
+            }
+        }
 
-        foreach (TileBinding b in batch)
+        if (matching.Count == 0) return;
+
+        foreach (TileBinding b in matching)
         {
             b.Image?.Dispose();
             b.Image = null;
@@ -160,46 +195,59 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
             b.BackendTexture = null;
         }
 
-        AngleInterop? interop = _interop;
-        if (interop != null)
+        try
         {
-            try
+            using ISkiaSharpPlatformGraphicsApiLease? api = lease.TryLeasePlatformGraphicsApi();
+            if (api?.Context is EglContext egl && egl.Display.Handle == currentDisplay)
             {
-                using ISkiaSharpPlatformGraphicsApiLease? api = lease.TryLeasePlatformGraphicsApi();
-                if (api?.Context is EglContext egl)
+                foreach (TileBinding b in matching)
                 {
-                    IntPtr currentDisplay = egl.Display.Handle;
-                    foreach (TileBinding b in batch)
+                    if (b.EglDisplay == currentDisplay)
                     {
-                        if (b.EglDisplay == currentDisplay)
+                        // EGL spec order: release bound pbuffer texture before deleting GL texture and destroying pbuffer.
+                        if (b.Pbuffer != IntPtr.Zero)
                         {
-                            if (b.GlTextureId != 0)
-                            {
-                                uint texId = b.GlTextureId;
-                                interop.GlDeleteTextures(1, ref texId);
-                                b.GlTextureId = 0;
-                            }
-                            if (b.Pbuffer != IntPtr.Zero)
-                            {
-                                interop.EglReleaseTexImage(currentDisplay, b.Pbuffer, EGL_BACK_BUFFER);
-                                interop.EglDestroySurface(currentDisplay, b.Pbuffer);
-                                b.Pbuffer = IntPtr.Zero;
-                            }
+                            interop.EglReleaseTexImage(currentDisplay, b.Pbuffer, EGL_BACK_BUFFER);
                         }
+                        if (b.GlTextureId != 0)
+                        {
+                            uint texId = b.GlTextureId;
+                            interop.GlDeleteTextures(1, ref texId);
+                            b.GlTextureId = 0;
+                        }
+                        if (b.Pbuffer != IntPtr.Zero)
+                        {
+                            interop.EglDestroySurface(currentDisplay, b.Pbuffer);
+                            b.Pbuffer = IntPtr.Zero;
+                        }
+                    }
+                    else if (b.EglDisplay == IntPtr.Zero && b.GlTextureId != 0)
+                    {
+                        uint texId = b.GlTextureId;
+                        interop.GlDeleteTextures(1, ref texId);
+                        b.GlTextureId = 0;
                     }
                 }
             }
-            catch
-            {
-            }
-
-            lease.GrContext?.ResetContext(GRGlBackendState.TextureBinding);
+        }
+        catch
+        {
         }
 
-        foreach (TileBinding b in batch)
+        lease.GrContext.ResetContext(GRGlBackendState.TextureBinding);
+
+        foreach (TileBinding b in matching)
         {
-            b.OpenedTexture?.Dispose();
-            b.OpenedTexture = null;
+            if (b.Pbuffer != IntPtr.Zero || b.GlTextureId != 0)
+            {
+                // EGL/GL teardown did not complete (e.g. lost/changed context): re-enqueue and keep OpenedTexture alive.
+                PendingCleanup.Enqueue(b);
+            }
+            else
+            {
+                b.OpenedTexture?.Dispose();
+                b.OpenedTexture = null;
+            }
         }
     }
 
@@ -238,9 +286,18 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
                 if (_bindings != null)
                 {
                     SKCanvas canvas = lease.SkCanvas;
+                    SKRect canvasRect = new(0, 0, Width, Height);
+                    canvas.Save();
+                    canvas.ClipRect(canvasRect);
+
                     if (!_tilesCoverWholeCanvas)
                     {
-                        canvas.DrawColor(SKColors.Black);
+                        using SKPaint bgPaint = new()
+                        {
+                            Color = new SKColor(0, 0, 0, (byte)(255 * lease.CurrentOpacity)),
+                            BlendMode = blendingMode.ToSKBlendMode()
+                        };
+                        canvas.DrawRect(canvasRect, bgPaint);
                     }
 
                     int originX = _snapshot.VirtualBounds.X;
@@ -277,6 +334,7 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
                         canvas.Restore();
                     }
 
+                    canvas.Restore();
                     return;
                 }
             }
@@ -374,10 +432,13 @@ public sealed class DxgiAngleSurfaceSource : IDirectSurfaceSource
                     }
                     catch
                     {
-                        if (glTex != 0) interop.GlDeleteTextures(1, ref glTex);
                         if (pbuffer != IntPtr.Zero)
                         {
                             interop.EglReleaseTexImage(eglDisplay, pbuffer, EGL_BACK_BUFFER);
+                        }
+                        if (glTex != 0) interop.GlDeleteTextures(1, ref glTex);
+                        if (pbuffer != IntPtr.Zero)
+                        {
                             interop.EglDestroySurface(eglDisplay, pbuffer);
                         }
                         openedTex.Dispose();
